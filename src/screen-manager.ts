@@ -5,6 +5,7 @@ type ManagedSession = {
   sessionName: string
   projectPath: string
   respawnEnabled: boolean
+  profileName?: string
 }
 
 const CLAUDE_CMD = 'claude --dangerously-load-development-channels server:hub'
@@ -17,7 +18,7 @@ export class ScreenManager {
   private managed = new Map<string, ManagedSession>()
   private respawnTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  async spawn(name: string, projectPath: string, instructions?: string): Promise<void> {
+  async spawn(name: string, projectPath: string, instructions?: string, profileName?: string): Promise<void> {
     const sessionName = `hub-${name}`
 
     // Kill existing session if any
@@ -25,7 +26,7 @@ export class ScreenManager {
 
     // Create detached tmux session running Claude
     await $`tmux new-session -d -s ${sessionName} -c ${projectPath} ${CLAUDE_CMD}`.quiet()
-    this.managed.set(name, { sessionName, projectPath, respawnEnabled: true })
+    this.managed.set(name, { sessionName, projectPath, respawnEnabled: true, profileName })
 
     // Auto-confirm the development channels warning, then send instructions if any
     this.autoConfirm(sessionName, instructions)
@@ -143,7 +144,7 @@ export class ScreenManager {
     }, 3000))
   }
 
-  async spawnTeam(name: string, projectPath: string, size: number, instructions?: string): Promise<void> {
+  async spawnTeam(name: string, projectPath: string, size: number, instructions?: string, profileName?: string): Promise<void> {
     const teammateNames = Array.from({ length: size - 1 }, (_, i) => `${name}-${i + 2}`)
     const tagsSuffix = instructions ? ` ${instructions}` : ''
     const leadPrompt = `You are the team lead "${name}". Create a team and spawn ${size - 1} teammates. Assign them names: ${teammateNames.join(', ')}. Wait for them to connect, then coordinate the work.${tagsSuffix}`
@@ -152,7 +153,7 @@ export class ScreenManager {
     const leadSession = `hub-${name}`
     try { await $`tmux kill-session -t ${leadSession}`.quiet() } catch {}
     await $`tmux new-session -d -s ${leadSession} -c ${projectPath} ${CLAUDE_TEAM_CMD}`.quiet()
-    this.managed.set(name, { sessionName: leadSession, projectPath, respawnEnabled: true })
+    this.managed.set(name, { sessionName: leadSession, projectPath, respawnEnabled: true, profileName })
     this.autoConfirm(leadSession, leadPrompt)
 
     // Wait for lead to initialize and create the team
@@ -164,7 +165,7 @@ export class ScreenManager {
       const tmSession = `hub-${tmName}`
       try { await $`tmux kill-session -t ${tmSession}`.quiet() } catch {}
       await $`tmux new-session -d -s ${tmSession} -c ${projectPath} ${CLAUDE_TEAM_CMD}`.quiet()
-      this.managed.set(tmName, { sessionName: tmSession, projectPath, respawnEnabled: true })
+      this.managed.set(tmName, { sessionName: tmSession, projectPath, respawnEnabled: true, profileName })
       this.autoConfirm(tmSession)
       await new Promise(r => setTimeout(r, 3000))
     }
@@ -199,5 +200,16 @@ export class ScreenManager {
 
   getManagedNames(): string[] {
     return [...this.managed.keys()]
+  }
+
+  getManagedEntry(name: string): ManagedSession | undefined {
+    return this.managed.get(name)
+  }
+
+  getManagedByPath(projectPath: string): ManagedSession | undefined {
+    for (const entry of this.managed.values()) {
+      if (entry.projectPath === projectPath) return entry
+    }
+    return undefined
   }
 }
