@@ -728,6 +728,19 @@
       }
     }
 
+    async function closeSession(name) {
+      if (!confirm(`Close session '${name}'? Claude will exit, then the tmux will close.`)) return
+      try {
+        await fetch('/api/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+      } catch (err) {
+        console.error('Close failed', err)
+      }
+    }
+
     // Spawn dialog
     function promptSpawn() {
       // Create modal
