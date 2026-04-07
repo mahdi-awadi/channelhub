@@ -7,7 +7,32 @@ export type LegacyTrustLevel = 'ask' | 'auto-approve'
 
 export type SessionStatus = 'active' | 'disconnected' | 'respawning'
 
+export type Category = 'silent' | 'logged' | 'review' | 'dangerous'
+
 export type FrontendSource = 'telegram' | 'web' | 'cli'
+
+export type ChannelOverrides = Partial<Record<FrontendSource, string>>
+
+export type VerificationConfig = {
+  commands: string[]
+  sentinelPhrase?: string   // default: "✅ COMPLETE"
+  timeoutSec?: number        // default: 120
+}
+
+export type Profile = {
+  name: string
+  description?: string
+  trust: TrustLevel
+  rules: string[]
+  facts: string[]
+  prefix: string
+  channelOverrides?: ChannelOverrides
+  driftDetection?: boolean   // default: true
+  sidecarEnabled?: boolean   // default: false
+  verification?: VerificationConfig
+}
+
+export type ProfileOverrides = Partial<Omit<Profile, 'name' | 'description'>>
 
 export type SessionConfig = {
   name: string
@@ -17,6 +42,8 @@ export type SessionConfig = {
   managed: boolean
   teamIndex: number       // 0 = lead or solo, 1+ = teammate
   teamSize: number        // 0 = solo, N = team of N
+  appliedProfile?: string           // name of profile used at spawn
+  profileOverrides?: ProfileOverrides // deltas from the profile
 }
 
 export type SessionState = SessionConfig & {
