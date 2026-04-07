@@ -513,6 +513,15 @@
             item.appendChild(restartBtn)
           }
 
+          if (s.managed && s.status !== 'disconnected') {
+            const closeBtn = document.createElement('button')
+            closeBtn.textContent = '✕'
+            closeBtn.title = 'Close session'
+            closeBtn.style.cssText = 'background:none;border:1px solid #c96;color:#c96;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;margin-left:auto;'
+            closeBtn.onclick = (e) => { e.stopPropagation(); closeSession(s.name) }
+            item.appendChild(closeBtn)
+          }
+
           const unread = unreadBySession[s.name]
           if (unread && s.name !== activeSession) {
             const badge = document.createElement('div')
@@ -725,6 +734,19 @@
         if (!res.ok) throw new Error(await res.text())
       } catch (err) {
         alert('Restart failed: ' + err)
+      }
+    }
+
+    async function closeSession(name) {
+      if (!confirm(`Close session '${name}'? Claude will exit, then the tmux will close.`)) return
+      try {
+        await fetch('/api/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+      } catch (err) {
+        console.error('Close failed', err)
       }
     }
 
