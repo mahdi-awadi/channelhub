@@ -126,3 +126,32 @@ describe('classify Bash benign commands', () => {
     expect(classify('Bash', { command: 'vim foo.txt' }, project)).toBe('review')
   })
 })
+
+describe('classify Write/Edit by path', () => {
+  const project = '/home/user/project'
+
+  test('Write inside project → logged', () => {
+    expect(classify('Write', { file_path: '/home/user/project/src/foo.ts' }, project)).toBe('logged')
+  })
+  test('Write outside project → review', () => {
+    expect(classify('Write', { file_path: '/home/user/other/foo.ts' }, project)).toBe('review')
+  })
+  test('Write to /etc → review', () => {
+    expect(classify('Write', { file_path: '/etc/hosts' }, project)).toBe('review')
+  })
+  test('Edit inside project → logged', () => {
+    expect(classify('Edit', { file_path: '/home/user/project/src/bar.ts' }, project)).toBe('logged')
+  })
+  test('Edit outside project → review', () => {
+    expect(classify('Edit', { file_path: '/tmp/foo.ts' }, project)).toBe('review')
+  })
+  test('MultiEdit inside project → logged', () => {
+    expect(classify('MultiEdit', { file_path: '/home/user/project/foo.ts' }, project)).toBe('logged')
+  })
+  test('Write with no file_path → review', () => {
+    expect(classify('Write', {}, project)).toBe('review')
+  })
+  test('Sibling directory → review', () => {
+    expect(classify('Write', { file_path: '/home/user/projectother/foo' }, project)).toBe('review')
+  })
+})
