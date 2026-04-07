@@ -138,3 +138,64 @@ describe('PermissionEngine classifier integration', () => {
     expect(forwarded.length).toBe(1)
   })
 })
+
+test('activity log records non-silent decisions', () => {
+  const reg = new SessionRegistry({ defaultTrust: 'auto', defaultUploadDir: '.' })
+  reg.register('/home/test:0')
+  const engine = new PermissionEngine(reg, () => {})
+  // Silent — should NOT log
+  engine.handle('/home/test:0', {
+    requestId: 'r1',
+    toolName: 'Read',
+    description: 'read',
+    inputPreview: '',
+    toolArgs: {},
+  })
+  // Logged — should log
+  engine.handle('/home/test:0', {
+    requestId: 'r2',
+    toolName: 'Bash',
+    description: 'ls',
+    inputPreview: '',
+    toolArgs: { command: 'ls' },
+  })
+  const activity = engine.getActivity()
+  expect(activity.length).toBe(1)
+  expect(activity[0].toolName).toBe('Bash')
+  expect(activity[0].category).toBe('logged')
+  expect(activity[0].action).toBe('allowed')
+})
+
+test('activity log records escalations', () => {
+  const reg = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+  reg.register('/home/test:0')
+  const engine = new PermissionEngine(reg, () => {})
+  engine.handle('/home/test:0', {
+    requestId: 'r1',
+    toolName: 'Bash',
+    description: 'rm',
+    inputPreview: '',
+    toolArgs: { command: 'rm -rf /' },
+  })
+  const activity = engine.getActivity()
+  expect(activity.length).toBe(1)
+  expect(activity[0].category).toBe('dangerous')
+  expect(activity[0].action).toBe('escalated')
+})
+
+test('activity log caps at MAX_LOG_ENTRIES', () => {
+  const reg = new SessionRegistry({ defaultTrust: 'auto', defaultUploadDir: '.' })
+  reg.register('/home/test:0')
+  const engine = new PermissionEngine(reg, () => {})
+  for (let i = 0; i < 600; i++) {
+    engine.handle('/home/test:0', {
+      requestId: `r${i}`,
+      toolName: 'Bash',
+      description: 'ls',
+      inputPreview: '',
+      toolArgs: { command: 'ls' },
+    })
+  }
+  const activity = engine.getActivity()
+  expect(activity.length).toBeLessThanOrEqual(500)
+})

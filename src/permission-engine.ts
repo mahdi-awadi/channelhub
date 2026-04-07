@@ -16,6 +16,16 @@ type PendingPermission = {
   requestId: string
 }
 
+export type ActivityEntry = {
+  sessionName: string
+  sessionPath: string
+  timestamp: number
+  toolName: string
+  category: Category
+  action: 'allowed' | 'escalated'
+  inputPreview: string
+}
+
 function decideAction(category: Category, trust: TrustLevel): 'allow' | 'escalate' {
   if (category === 'silent') return 'allow'
   if (category === 'dangerous') return trust === 'yolo' ? 'allow' : 'escalate'
@@ -28,6 +38,8 @@ export class PermissionEngine {
   private registry: SessionRegistry
   private onForward: (req: PermissionRequest) => void
   private pending = new Map<string, PendingPermission>()
+  private activityLog: ActivityEntry[] = []
+  private readonly MAX_LOG_ENTRIES = 500
 
   constructor(
     registry: SessionRegistry,
@@ -35,6 +47,17 @@ export class PermissionEngine {
   ) {
     this.registry = registry
     this.onForward = onForward
+  }
+
+  getActivity(): ActivityEntry[] {
+    return [...this.activityLog]
+  }
+
+  private recordActivity(entry: ActivityEntry): void {
+    this.activityLog.push(entry)
+    if (this.activityLog.length > this.MAX_LOG_ENTRIES) {
+      this.activityLog.shift()
+    }
   }
 
   handle(sessionPath: string, input: PermissionInput): PermissionResponse | null {
@@ -45,6 +68,18 @@ export class PermissionEngine {
     const projectPath = sessionPath.replace(/:\d+$/, '')
     const category = classify(input.toolName, input.toolArgs ?? {}, projectPath)
     const action = decideAction(category, session.trust)
+
+    if (category !== 'silent') {
+      this.recordActivity({
+        sessionName: session.name,
+        sessionPath,
+        timestamp: Date.now(),
+        toolName: input.toolName,
+        category,
+        action: action === 'allow' ? 'allowed' : 'escalated',
+        inputPreview: input.inputPreview.slice(0, 200),
+      })
+    }
 
     if (action === 'allow') {
       return { requestId: input.requestId, behavior: 'allow' }
