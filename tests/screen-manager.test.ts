@@ -34,4 +34,10 @@ describe('ScreenManager', () => {
   test('addTeammate is a function', () => {
     expect(typeof manager.addTeammate).toBe('function')
   })
+
+  test('gracefulKill is a no-op for unknown name', async () => {
+    // Should not throw and should not affect state.
+    await manager.gracefulKill('does-not-exist')
+    expect(manager.isManaged('does-not-exist')).toBe(false)
+  })
 })
