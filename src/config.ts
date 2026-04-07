@@ -60,3 +60,14 @@ export function loadSessions(dir: string = HUB_DIR): Record<string, SessionConfi
 export function saveSessions(sessions: Record<string, SessionConfig>, dir: string = HUB_DIR): void {
   writeJson(join(dir, 'sessions.json'), sessions)
 }
+
+import { loadProfiles as loadProfilesFromModule, saveProfiles as saveProfilesFromModule } from './profiles'
+import type { Profile } from './types'
+
+export function loadProfilesForHub(): Profile[] {
+  return loadProfilesFromModule(HUB_DIR)
+}
+
+export function saveProfilesForHub(profiles: Profile[]): void {
+  saveProfilesFromModule(profiles, HUB_DIR)
+}
