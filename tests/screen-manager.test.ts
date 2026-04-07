@@ -46,8 +46,9 @@ describe('ScreenManager', () => {
     const name = 'test-fallback'
     const sessionName = `hub-${name}`
 
-    // Start a fake tmux session running `sleep 60` — it won't respond to /exit.
-    await $`tmux new-session -d -s ${sessionName} sleep 60`.quiet()
+    // Start a fake tmux session that ignores Ctrl+C and /exit commands.
+    // Uses bash with trap to ignore SIGINT, and runs an infinite loop.
+    await $`tmux new-session -d -s ${sessionName} bash -c "trap '' INT; while true; do sleep 1; done"`.quiet()
 
     // Inject it into ScreenManager's managed map so gracefulKill treats it as managed.
     ;(manager as any).managed.set(name, {
