@@ -1,0 +1,28 @@
+{
+  "name": "channelhub",
+  "version": "0.1.0-beta.1",
+  "description": "Multi-session channel plugin for Claude Code — manage all your sessions from Telegram, web, or CLI",
+  "repository": "https://github.com/mahdi-awadi/channelhub",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "daemon": "bun run src/daemon.ts",
+    "shim": "bun run src/shim.ts",
+    "cli": "bun run src/cli.ts",
+    "start": "bun install --no-summary && bun run src/shim.ts",
+    "test": "bun test",
+    "build": "bun build src/daemon.ts --outfile dist/daemon.js --target bun && bun build src/shim.ts --outfile dist/shim.js --target bun && bun build src/cli.ts --outfile dist/cli.js --target bun"
+  },
+  "bin": {
+    "hub": "./src/cli.ts",
+    "hub-shim": "./src/shim.ts",
+    "hub-daemon": "./src/daemon.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "grammy": "^1.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

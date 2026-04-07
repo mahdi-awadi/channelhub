@@ -1,0 +1,62 @@
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
+import type { HubConfig, SessionConfig, TrustLevel } from './types'
+
+export const HUB_DIR = process.env.CLAUDE_PLUGIN_DATA
+  ?? process.env.HUB_DIR
+  ?? join(homedir(), '.claude', 'channels', 'hub')
+
+function defaultConfig(): HubConfig {
+  return {
+    webPort: 3000,
+    telegramToken: '',
+    telegramAllowFrom: [],
+    defaultTrust: 'ask',
+    defaultUploadDir: '.',
+  }
+}
+
+function ensureDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+}
+
+function readJson<T>(path: string): T | null {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+function writeJson(path: string, data: unknown): void {
+  const dir = join(path, '..')
+  ensureDir(dir)
+  const tmp = path + '.tmp'
+  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+export function loadHubConfig(dir: string = HUB_DIR): HubConfig {
+  const raw = readJson<Partial<HubConfig>>(join(dir, 'config.json'))
+  if (!raw) return defaultConfig()
+  return {
+    webPort: raw.webPort ?? 3000,
+    telegramToken: raw.telegramToken ?? '',
+    telegramAllowFrom: raw.telegramAllowFrom ?? [],
+    defaultTrust: raw.defaultTrust ?? 'ask',
+    defaultUploadDir: raw.defaultUploadDir ?? '.',
+  }
+}
+
+export function saveHubConfig(config: HubConfig, dir: string = HUB_DIR): void {
+  writeJson(join(dir, 'config.json'), config)
+}
+
+export function loadSessions(dir: string = HUB_DIR): Record<string, SessionConfig> {
+  return readJson<Record<string, SessionConfig>>(join(dir, 'sessions.json')) ?? {}
+}
+
+export function saveSessions(sessions: Record<string, SessionConfig>, dir: string = HUB_DIR): void {
+  writeJson(join(dir, 'sessions.json'), sessions)
+}

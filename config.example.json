@@ -1,0 +1,7 @@
+{
+  "webPort": 3000,
+  "telegramToken": "",
+  "telegramAllowFrom": [],
+  "defaultTrust": "ask",
+  "defaultUploadDir": "."
+}

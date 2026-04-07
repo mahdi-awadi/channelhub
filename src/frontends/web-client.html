@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Hub</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1a1a2e;
+      --sidebar: #16213e;
+      --border: #0f3460;
+      --accent: #e94560;
+      --text: #e0e0e0;
+      --text-muted: #888;
+      --user-bubble: #1a3a6e;
+      --claude-bubble: #1e1e3a;
+      --input-bg: #0d0d1a;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      transition: width 0.2s;
+    }
+
+    #sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #spawn-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #spawn-btn:hover { opacity: 0.85; }
+
+    #session-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+
+    .session-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background 0.1s;
+      position: relative;
+    }
+    .session-item:hover { background: rgba(255,255,255,0.04); }
+    .session-item.active { background: rgba(233,69,96,0.12); border-left-color: var(--accent); }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-right: 10px;
+      flex-shrink: 0;
+    }
+    .status-dot.active { background: #4caf50; }
+    .status-dot.disconnected { background: #f44336; }
+    .status-dot.respawning { background: #ff9800; }
+
+    .session-name {
+      flex: 1;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .badge {
+      background: var(--accent);
+      color: white;
+      border-radius: 10px;
+      padding: 1px 6px;
+      font-size: 11px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    /* Main area */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #header {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--sidebar);
+    }
+
+    #session-title {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .trust-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: var(--border);
+      color: var(--text-muted);
+    }
+    .trust-badge.auto { background: #1a3a1a; color: #4caf50; }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+      max-width: 75%;
+    }
+    .msg-row.user { align-self: flex-end; align-items: flex-end; }
+    .msg-row.claude { align-self: flex-start; align-items: flex-start; }
+    .msg-row.other { align-self: flex-start; align-items: flex-start; opacity: 0.75; }
+
+    .msg-bubble {
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    .msg-row.user .msg-bubble { background: var(--user-bubble); border-radius: 12px 12px 2px 12px; }
+    .msg-row.claude .msg-bubble { background: var(--claude-bubble); border: 1px solid var(--border); border-radius: 12px 12px 12px 2px; }
+    .msg-row.other .msg-bubble { background: var(--claude-bubble); border: 1px solid var(--border); font-style: italic; border-radius: 12px 12px 12px 2px; }
+
+    .msg-meta {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin: 2px 4px;
+    }
+
+    .session-tag {
+      display: inline-block;
+      background: var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 10px;
+      margin-bottom: 3px;
+      color: var(--text-muted);
+    }
+
+    /* Permission card */
+    .perm-card {
+      background: #1a2a1a;
+      border: 1px solid #2a5a2a;
+      border-radius: 10px;
+      padding: 12px 14px;
+      max-width: 420px;
+      align-self: flex-start;
+    }
+    .perm-card h4 { color: #ff9800; font-size: 13px; margin-bottom: 6px; }
+    .perm-card .perm-detail { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+    .perm-card code { background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .perm-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .perm-allow { background: #2a5a2a; color: #4caf50; border: 1px solid #4caf50; padding: 5px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .perm-allow:hover { background: #3a7a3a; }
+    .perm-deny { background: #4a1a1a; color: #f44336; border: 1px solid #f44336; padding: 5px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .perm-deny:hover { background: #6a2a2a; }
+
+    /* Input area */
+    #input-area {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      gap: 8px;
+      background: var(--input-bg);
+    }
+
+    #msg-input {
+      flex: 1;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 13px;
+      resize: none;
+      min-height: 42px;
+      max-height: 120px;
+    }
+    #msg-input:focus { outline: none; border-color: var(--accent); }
+    #msg-input::placeholder { color: var(--text-muted); }
+
+    #send-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0 18px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    #send-btn:hover { opacity: 0.85; }
+    #send-btn:disabled { opacity: 0.4; cursor: default; }
+
+    /* Drop overlay */
+    #drop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(233,69,96,0.15);
+      border: 3px dashed var(--accent);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+      font-size: 20px;
+      color: var(--accent);
+    }
+    body.dragging #drop-overlay { display: flex; }
+
+    /* No session */
+    #no-session {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Mobile */
+    @media (max-width: 768px) {
+      #sidebar {
+        width: 52px;
+        min-width: 52px;
+      }
+      #sidebar-header { padding: 12px 8px; justify-content: center; }
+      #sidebar-header span { display: none; }
+      #spawn-btn { padding: 4px 6px; font-size: 10px; }
+      .session-name { display: none; }
+      .session-item { justify-content: center; padding: 12px 8px; }
+      .status-dot { margin-right: 0; }
+      .badge { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="drop-overlay">Drop file to upload</div>
+
+  <div id="login-screen" style="display:none; position:fixed; inset:0; background:var(--bg); flex-direction:column; align-items:center; justify-content:center; gap:24px; z-index:200;">
+    <div style="font-size:24px; font-weight:700; color:var(--accent);">Claude Code Hub</div>
+    <div style="color:var(--text-muted); font-size:14px;">Sign in with Telegram to continue</div>
+    <div id="telegram-widget-container"></div>
+  </div>
+
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span>Claude Code Hub</span>
+      <button id="spawn-btn" onclick="promptSpawn()">+ Spawn</button>
+      <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;" onclick="logout()">Logout</button>
+    </div>
+    <div id="session-list"></div>
+  </div>
+
+  <div id="main">
+    <div id="header">
+      <span id="session-title" style="color: var(--text-muted)">No session selected</span>
+      <span id="trust-badge" class="trust-badge" style="display:none"></span>
+      <code id="tmux-cmd" style="display:none; margin-left:auto; font-size:11px; color:var(--text-muted); background:rgba(0,0,0,0.3); padding:3px 8px; border-radius:4px; cursor:pointer;" title="Click to copy" onclick="copyTmuxCmd()"></code>
+    </div>
+    <div id="messages">
+      <div id="no-session" style="color: var(--text-muted); margin: auto; opacity: 0.5;">Select a session to start chatting</div>
+    </div>
+    <div id="prompt-tags" style="border-top:1px solid var(--border);padding:6px 16px;display:flex;flex-wrap:wrap;gap:6px;background:var(--input-bg);"></div>
+    <div id="attached-files" style="padding:0 16px;display:none;flex-wrap:wrap;gap:6px;background:var(--input-bg);"></div>
+    <div id="input-area">
+      <label style="cursor:pointer;display:flex;align-items:center;color:var(--text-muted);font-size:18px;padding:0 4px;" title="Attach file">
+        <input type="file" id="file-input" multiple style="display:none;" onchange="handleFileSelect(this)" />
+        📎
+      </label>
+      <textarea id="msg-input" placeholder="Type a message..." rows="1"
+        onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      <button id="send-btn" onclick="sendMsg()">Send</button>
+    </div>
+  </div>
+
+  <script>
+    // Prompt tags — toggleable instructions appended to messages
+    const defaultTags = [
+      { id: 'superpowers', label: 'Use Superpowers Skills', text: 'use superpowers skills', active: false },
+      { id: 'tdd', label: 'TDD', text: 'follow TDD workflow', active: false },
+      { id: 'concise', label: 'Be Concise', text: 'be concise and direct', active: false },
+      { id: 'nocommit', label: 'No Commit', text: 'do not commit changes', active: false },
+      { id: 'planfirst', label: 'Plan First', text: 'create a plan before implementing', active: false },
+      { id: 'review', label: 'Review Code', text: 'review the code for issues', active: false },
+    ]
+
+    function loadTags() {
+      const saved = localStorage.getItem('hub_tags')
+      if (saved) {
+        try {
+          const states = JSON.parse(saved)
+          for (const tag of defaultTags) {
+            if (states[tag.id] !== undefined) tag.active = states[tag.id]
+          }
+        } catch {}
+      }
+    }
+
+    function saveTags() {
+      const states = {}
+      for (const tag of defaultTags) states[tag.id] = tag.active
+      localStorage.setItem('hub_tags', JSON.stringify(states))
+    }
+
+    function renderTags() {
+      const container = document.getElementById('prompt-tags')
+      container.innerHTML = ''
+      for (const tag of defaultTags) {
+        const el = document.createElement('button')
+        el.textContent = tag.label
+        el.style.cssText = `
+          padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer; transition:all 0.15s;
+          border:1px solid ${tag.active ? 'var(--accent)' : 'var(--border)'};
+          background:${tag.active ? 'rgba(233,69,96,0.15)' : 'transparent'};
+          color:${tag.active ? 'var(--accent)' : 'var(--text-muted)'};
+        `
+        el.onclick = () => {
+          tag.active = !tag.active
+          saveTags()
+          renderTags()
+        }
+        container.appendChild(el)
+      }
+    }
+
+    function getActiveTagsText() {
+      const active = defaultTags.filter(t => t.active).map(t => t.text)
+      return active.length > 0 ? '\n\n[Instructions: ' + active.join(', ') + ']' : ''
+    }
+
+    loadTags()
+    renderTags()
+
+    // State
+    let ws = null
+    let activeSession = null
+    let sessions = []
+    let messagesBySession = {}
+    let unreadBySession = {}
+    let currentTasks = {} // folder path → AgentTask[]
+
+    // Escape HTML for XSS prevention
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    }
+
+    // WebSocket
+    function connectWs() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${protocol}//${location.host}/ws`)
+
+      ws.onopen = () => {
+        console.log('WS connected')
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          handleWsMessage(msg)
+        } catch (e) {
+          console.error('WS parse error', e)
+        }
+      }
+
+      ws.onclose = () => {
+        console.log('WS closed, reconnecting...')
+        setTimeout(connectWs, 2000)
+      }
+
+      ws.onerror = (err) => {
+        console.error('WS error', err)
+      }
+    }
+
+    function handleWsMessage(msg) {
+      if (msg.type === 'sessions') {
+        sessions = msg.data
+        renderSidebar()
+      } else if (msg.type === 'message') {
+        const { sessionName, text, files } = msg
+        if (!messagesBySession[sessionName]) messagesBySession[sessionName] = []
+        messagesBySession[sessionName].push({ role: 'claude', text, files, ts: Date.now() })
+
+        if (sessionName === activeSession) {
+          appendMessage({ role: 'claude', text, files }, false)
+        } else {
+          // Badge + append with tag
+          unreadBySession[sessionName] = (unreadBySession[sessionName] || 0) + 1
+          renderSidebar()
+          if (activeSession) {
+            appendMessage({ role: 'claude', text, files, fromSession: sessionName }, true)
+          }
+        }
+      } else if (msg.type === 'permission') {
+        showPermissionCard(msg)
+      } else if (msg.type === 'tasks') {
+        currentTasks = msg.data
+        renderSidebar()
+      }
+    }
+
+    // Sidebar
+    function renderSidebar() {
+      const list = document.getElementById('session-list')
+      list.innerHTML = ''
+
+      // Group sessions by folder path (strip :index suffix)
+      const groups = new Map()
+      for (const s of sessions) {
+        const folder = s.path ? s.path.replace(/:\d+$/, '') : s.name
+        if (!groups.has(folder)) groups.set(folder, [])
+        groups.get(folder).push(s)
+      }
+
+      for (const [folder, members] of groups) {
+        // Sort by teamIndex
+        members.sort((a, b) => (a.teamIndex ?? 0) - (b.teamIndex ?? 0))
+        const isTeam = members.length > 1
+
+        for (const s of members) {
+          const isLead = !isTeam || (s.teamIndex ?? 0) === 0
+          const item = document.createElement('div')
+          item.className = 'session-item' + (s.name === activeSession ? ' active' : '')
+          item.onclick = () => selectSession(s.name)
+
+          if (!isLead) {
+            item.style.paddingLeft = '32px'
+          }
+
+          const dot = document.createElement('div')
+          dot.className = `status-dot ${s.status}`
+
+          const name = document.createElement('div')
+          name.className = 'session-name'
+          name.textContent = s.name
+
+          item.appendChild(dot)
+          item.appendChild(name)
+
+          if (isLead && isTeam) {
+            const addBtn = document.createElement('button')
+            addBtn.textContent = '[+]'
+            addBtn.title = 'Add teammate'
+            addBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px;margin-left:4px;'
+            addBtn.onclick = (e) => { e.stopPropagation(); addTeammate(s.name) }
+            item.appendChild(addBtn)
+          }
+
+          if (s.status === 'disconnected') {
+            const restartBtn = document.createElement('button')
+            restartBtn.textContent = '↻'
+            restartBtn.title = 'Restart session'
+            restartBtn.style.cssText = 'background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;margin-left:auto;'
+            restartBtn.onclick = (e) => { e.stopPropagation(); restartSession(s.name, s.path) }
+            item.appendChild(restartBtn)
+          }
+
+          const unread = unreadBySession[s.name]
+          if (unread && s.name !== activeSession) {
+            const badge = document.createElement('div')
+            badge.className = 'badge'
+            badge.textContent = unread > 99 ? '99+' : String(unread)
+            item.appendChild(badge)
+          }
+
+          list.appendChild(item)
+        }
+
+        // Task summary line if this team/folder has tasks
+        const tasks = currentTasks[folder]
+        if (tasks && tasks.length > 0) {
+          const done = tasks.filter(t => t.status === 'completed').length
+          const inProgress = tasks.filter(t => t.status === 'in_progress').length
+          const summary = document.createElement('div')
+          summary.style.cssText = 'padding:4px 16px 4px 32px;font-size:11px;color:var(--text-muted);'
+          summary.textContent = `Tasks: ${done}/${tasks.length} done${inProgress > 0 ? `, ${inProgress} active` : ''}`
+          list.appendChild(summary)
+        }
+      }
+    }
+
+    async function addTeammate(leadName) {
+      try {
+        const res = await fetch('/api/team/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leadName })
+        })
+        if (!res.ok) throw new Error(await res.text())
+      } catch (err) {
+        alert('Failed to add teammate: ' + err)
+      }
+    }
+
+    function selectSession(name) {
+      activeSession = name
+      unreadBySession[name] = 0
+
+      // Update header
+      const session = sessions.find(s => s.name === name)
+      document.getElementById('session-title').textContent = name
+      document.getElementById('session-title').style.color = ''
+
+      const badge = document.getElementById('trust-badge')
+      const tmuxCmd = document.getElementById('tmux-cmd')
+      if (session) {
+        badge.style.display = ''
+        badge.textContent = session.trust === 'auto-approve' ? 'auto-approve' : 'ask'
+        badge.className = 'trust-badge' + (session.trust === 'auto-approve' ? ' auto' : '')
+        tmuxCmd.style.display = ''
+        tmuxCmd.textContent = `tmux attach -t hub-${name}`
+      } else {
+        badge.style.display = 'none'
+        tmuxCmd.style.display = 'none'
+      }
+
+      // Render messages
+      const area = document.getElementById('messages')
+      area.innerHTML = ''
+
+      const msgs = messagesBySession[name] || []
+      for (const m of msgs) {
+        appendMessage(m, false)
+      }
+
+      renderSidebar()
+      scrollToBottom()
+    }
+
+    function appendMessage(msg, isOther) {
+      const area = document.getElementById('messages')
+
+      // Remove empty state
+      const empty = document.getElementById('no-session')
+      if (empty) empty.remove()
+
+      const row = document.createElement('div')
+      row.className = 'msg-row ' + (msg.role === 'user' ? 'user' : isOther ? 'other' : 'claude')
+
+      if (isOther && msg.fromSession) {
+        const tag = document.createElement('div')
+        tag.className = 'session-tag'
+        tag.textContent = msg.fromSession
+        row.appendChild(tag)
+      }
+
+      const bubble = document.createElement('div')
+      bubble.className = 'msg-bubble'
+      bubble.innerHTML = escapeHtml(msg.text || '').replace(/\n/g, '<br>')
+
+      row.appendChild(bubble)
+
+      if (msg.files && msg.files.length > 0) {
+        for (const f of msg.files) {
+          const link = document.createElement('a')
+          link.href = '#'
+          link.textContent = escapeHtml(f)
+          link.style.cssText = 'display:block;font-size:11px;color:#4a9eff;margin-top:4px;'
+          row.appendChild(link)
+        }
+      }
+
+      area.appendChild(row)
+      scrollToBottom()
+    }
+
+    function scrollToBottom() {
+      const area = document.getElementById('messages')
+      area.scrollTop = area.scrollHeight
+    }
+
+    // Send message
+    async function sendMsg() {
+      const input = document.getElementById('msg-input')
+      const text = input.value.trim()
+      if ((!text && pendingFiles.length === 0) || !activeSession) return
+
+      // Upload files first
+      const filePaths = await uploadFiles()
+      const fileNote = filePaths.length > 0
+        ? '\n\n[Files uploaded: ' + filePaths.join(', ') + ']'
+        : ''
+      const fullText = (text || 'See attached files') + fileNote + getActiveTagsText()
+      const displayText = text + (filePaths.length > 0 ? '\n📎 ' + filePaths.map(p => p.split('/').pop()).join(', ') : '')
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'message', text: fullText, sessionName: activeSession }))
+      }
+
+      // Optimistic UI
+      if (!messagesBySession[activeSession]) messagesBySession[activeSession] = []
+      messagesBySession[activeSession].push({ role: 'user', text: displayText, ts: Date.now() })
+      appendMessage({ role: 'user', text: displayText }, false)
+
+      input.value = ''
+      autoResize(input)
+    }
+
+    function handleKey(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        sendMsg()
+      }
+    }
+
+    function autoResize(el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+    }
+
+    // Permission card
+    function showPermissionCard(req) {
+      const area = document.getElementById('messages')
+
+      const card = document.createElement('div')
+      card.className = 'perm-card'
+      card.id = `perm-${req.requestId}`
+
+      card.innerHTML = `
+        <h4>Permission Request — ${escapeHtml(req.sessionName)}</h4>
+        <div class="perm-detail">Tool: <code>${escapeHtml(req.toolName)}</code></div>
+        <div class="perm-detail">${escapeHtml(req.description)}</div>
+        <div class="perm-detail">Preview: <code>${escapeHtml(req.inputPreview)}</code></div>
+        <div class="perm-actions">
+          <button class="perm-allow" onclick="respondPermission('${escapeHtml(req.requestId)}', 'allow')">Allow</button>
+          <button class="perm-allow" style="background:#1a3a3a;color:#4acfcf;border-color:#4acfcf;" onclick="respondPermission('${escapeHtml(req.requestId)}', 'always')">Always Allow</button>
+          <button class="perm-deny" onclick="respondPermission('${escapeHtml(req.requestId)}', 'deny')">Deny</button>
+        </div>
+      `
+
+      area.appendChild(card)
+      scrollToBottom()
+    }
+
+    function respondPermission(requestId, behavior) {
+      // 'allow' = Yes (option 1), 'always' = Yes don't ask again (option 2), 'deny' = No (option 3)
+      const mappedBehavior = behavior === 'always' ? 'allow' : behavior
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'permission_response', requestId, behavior: mappedBehavior, option: behavior === 'always' ? 2 : behavior === 'allow' ? 1 : 3 }))
+      }
+      const card = document.getElementById(`perm-${requestId}`)
+      if (card) {
+        const label = behavior === 'deny' ? 'denied' : behavior === 'always' ? 'always allowed' : 'allowed'
+        card.innerHTML = `<div style="color: var(--text-muted); font-size: 12px;">Permission ${label}</div>`
+      }
+    }
+
+    // Copy tmux command
+    function copyTmuxCmd() {
+      const cmd = document.getElementById('tmux-cmd').textContent
+      navigator.clipboard.writeText(cmd).then(() => {
+        const el = document.getElementById('tmux-cmd')
+        const orig = el.textContent
+        el.textContent = 'Copied!'
+        setTimeout(() => { el.textContent = orig }, 1000)
+      })
+    }
+
+    // Restart disconnected session
+    async function restartSession(name, path) {
+      try {
+        const res = await fetch('/api/spawn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, path })
+        })
+        if (!res.ok) throw new Error(await res.text())
+      } catch (err) {
+        alert('Restart failed: ' + err)
+      }
+    }
+
+    // Spawn dialog
+    function promptSpawn() {
+      // Create modal
+      const overlay = document.createElement('div')
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;display:flex;align-items:center;justify-content:center;'
+
+      const modal = document.createElement('div')
+      modal.style.cssText = 'background:var(--sidebar);border:1px solid var(--border);border-radius:12px;padding:24px;width:400px;max-width:90vw;'
+      modal.innerHTML = `
+        <div style="font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent);">Spawn New Session</div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Session Name</label>
+        <input id="spawn-name" type="text" placeholder="my-project" style="width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;margin-bottom:12px;outline:none;" />
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Project Path</label>
+        <input id="spawn-path" type="text" placeholder="/home/" style="width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;margin-bottom:4px;outline:none;" />
+        <div id="spawn-suggestions" style="max-height:150px;overflow-y:auto;margin-bottom:12px;"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin-bottom:12px;cursor:pointer;">
+          <input type="checkbox" id="spawn-team" />
+          Run as team
+          <input type="number" id="spawn-team-size" value="3" min="2" max="10" style="width:50px;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;padding:4px;color:var(--text);font-size:12px;display:none;" />
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button id="spawn-cancel" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Cancel</button>
+          <button id="spawn-submit" style="background:var(--accent);color:white;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Spawn</button>
+        </div>
+      `
+      overlay.appendChild(modal)
+      document.body.appendChild(overlay)
+
+      const nameInput = document.getElementById('spawn-name')
+      const pathInput = document.getElementById('spawn-path')
+      const suggestions = document.getElementById('spawn-suggestions')
+
+      const teamCheck = document.getElementById('spawn-team')
+      const teamSizeInput = document.getElementById('spawn-team-size')
+      teamCheck.addEventListener('change', () => {
+        teamSizeInput.style.display = teamCheck.checked ? '' : 'none'
+      })
+
+      nameInput.focus()
+
+      // Browse directories as user types path
+      let browseTimeout = null
+      pathInput.addEventListener('input', () => {
+        clearTimeout(browseTimeout)
+        browseTimeout = setTimeout(() => browsePath(pathInput.value), 300)
+      })
+      // Trigger initial browse
+      setTimeout(() => browsePath('/home/'), 100)
+
+      async function browsePath(path) {
+        if (!path) return
+        try {
+          const res = await fetch('/api/browse?path=' + encodeURIComponent(path))
+          if (!res.ok) return
+          const dirs = await res.json()
+          suggestions.innerHTML = ''
+          for (const d of dirs) {
+            const item = document.createElement('div')
+            item.textContent = d
+            item.style.cssText = 'padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text);border-radius:4px;font-family:monospace;'
+            item.onmouseenter = () => item.style.background = 'rgba(255,255,255,0.06)'
+            item.onmouseleave = () => item.style.background = ''
+            item.onclick = () => {
+              pathInput.value = d
+              browsePath(d)
+              // Auto-fill name from folder
+              const parts = d.replace(/\/+$/, '').split('/')
+              nameInput.value = parts[parts.length - 1] || ''
+            }
+            suggestions.appendChild(item)
+          }
+        } catch {}
+      }
+
+      document.getElementById('spawn-cancel').onclick = () => overlay.remove()
+      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove() }
+
+      document.getElementById('spawn-submit').onclick = () => {
+        const name = nameInput.value.trim()
+        const path = pathInput.value.trim()
+        if (!name || !path) return
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const isTeam = document.getElementById('spawn-team').checked
+          const size = isTeam ? parseInt(document.getElementById('spawn-team-size').value) || 3 : 1
+          const tags = getActiveTagsText()
+          ws.send(JSON.stringify({ type: 'spawn', name, path, teamSize: size, instructions: tags || undefined }))
+        }
+        overlay.remove()
+      }
+    }
+
+    // File attachments
+    let pendingFiles = []
+
+    function handleFileSelect(input) {
+      for (const file of input.files) {
+        pendingFiles.push(file)
+      }
+      input.value = ''
+      renderAttachedFiles()
+    }
+
+    function renderAttachedFiles() {
+      const container = document.getElementById('attached-files')
+      if (pendingFiles.length === 0) {
+        container.style.display = 'none'
+        return
+      }
+      container.style.display = 'flex'
+      container.innerHTML = ''
+      pendingFiles.forEach((file, i) => {
+        const chip = document.createElement('div')
+        chip.style.cssText = 'display:flex;align-items:center;gap:4px;background:var(--border);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text);'
+        const isImage = file.type.startsWith('image/')
+        chip.innerHTML = `${isImage ? '🖼' : '📄'} ${escapeHtml(file.name)} <span style="cursor:pointer;color:var(--accent);margin-left:2px;" onclick="removeFile(${i})">✕</span>`
+        if (isImage) {
+          const thumb = document.createElement('img')
+          thumb.src = URL.createObjectURL(file)
+          thumb.style.cssText = 'width:20px;height:20px;object-fit:cover;border-radius:3px;'
+          chip.prepend(thumb)
+        }
+        container.appendChild(chip)
+      })
+    }
+
+    function removeFile(index) {
+      pendingFiles.splice(index, 1)
+      renderAttachedFiles()
+    }
+
+    async function uploadFiles() {
+      if (pendingFiles.length === 0) return []
+      const uploadedPaths = []
+      for (const file of pendingFiles) {
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('sessionName', activeSession || '_temp')
+        try {
+          const res = await fetch('/api/upload-temp', { method: 'POST', body: formData })
+          if (res.ok) {
+            const data = await res.json()
+            uploadedPaths.push(data.path)
+          }
+        } catch {}
+      }
+      pendingFiles = []
+      renderAttachedFiles()
+      return uploadedPaths
+    }
+
+    // Drag-and-drop file upload
+    document.addEventListener('dragenter', (e) => {
+      e.preventDefault()
+      document.body.classList.add('dragging')
+    })
+
+    document.addEventListener('dragleave', (e) => {
+      if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
+        document.body.classList.remove('dragging')
+      }
+    })
+
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault()
+    })
+
+    document.addEventListener('drop', (e) => {
+      e.preventDefault()
+      document.body.classList.remove('dragging')
+
+      const files = e.dataTransfer?.files
+      if (!files || files.length === 0) return
+
+      for (const file of files) {
+        pendingFiles.push(file)
+      }
+      renderAttachedFiles()
+    })
+
+    // Telegram Login
+    let currentUser = null
+
+    function checkAuth() {
+      const saved = localStorage.getItem('hub_user')
+      if (saved) {
+        try {
+          currentUser = JSON.parse(saved)
+          showApp()
+          return
+        } catch {}
+      }
+      showLogin()
+    }
+
+    function showLogin() {
+      document.getElementById('sidebar').style.display = 'none'
+      document.getElementById('main').style.display = 'none'
+      document.getElementById('login-screen').style.display = 'flex'
+      // Load Telegram widget only when login screen is shown
+      const container = document.getElementById('telegram-widget-container')
+      if (container && !container.hasChildNodes()) {
+        const script = document.createElement('script')
+        script.src = 'https://telegram.org/js/telegram-widget.js?23'
+        script.async = true
+        script.setAttribute('data-telegram-login', '__TELEGRAM_BOT_USERNAME__')
+        script.setAttribute('data-size', 'large')
+        script.setAttribute('data-onauth', 'onTelegramAuth(user)')
+        script.setAttribute('data-request-access', 'write')
+        container.appendChild(script)
+      }
+    }
+
+    function showApp() {
+      document.getElementById('login-screen').style.display = 'none'
+      document.getElementById('sidebar').style.display = ''
+      document.getElementById('main').style.display = ''
+      connectWs()
+    }
+
+    window.onTelegramAuth = async function(user) {
+      // Verify with server
+      try {
+        const res = await fetch('/api/auth/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(user)
+        })
+        if (!res.ok) {
+          const err = await res.text()
+          alert('Login denied: ' + err)
+          return
+        }
+        currentUser = user
+        localStorage.setItem('hub_user', JSON.stringify(user))
+        showApp()
+      } catch (err) {
+        alert('Login failed: ' + err)
+      }
+    }
+
+    function logout() {
+      currentUser = null
+      localStorage.removeItem('hub_user')
+      if (ws) ws.close()
+      showLogin()
+    }
+
+    // Init
+    checkAuth()
+  </script>
+</body>
+</html>

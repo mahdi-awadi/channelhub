@@ -1,0 +1,254 @@
+# ChannelHub
+
+> ⚠️ **Beta Software** — ChannelHub is in active development. Expect bugs, breaking changes, and rough edges. Bug reports and contributions are welcome. Do not rely on it for critical workflows yet.
+
+A multi-session channel plugin for [Claude Code](https://claude.ai/code) that lets you manage all your Claude sessions from one place — Telegram, web dashboard, or CLI.
+
+**The problem:** Claude Code channels are 1:1 — one bot per session. If you run multiple projects, you need multiple bots or keep switching.
+
+**The solution:** ChannelHub runs a single daemon that accepts connections from all your Claude sessions. Send messages, approve permissions, upload files, and spawn agent teams — all from one Telegram bot or web dashboard.
+
+## Features
+
+- **Multi-session management** — all Claude sessions visible in one dashboard
+- **Telegram bot** — send messages, approve permissions, upload photos/documents from your phone
+- **Web dashboard** — real-time chat, permission prompts, session status, file upload
+- **Permission relay** — approve/deny tool use from Telegram or web (native MCP channel protocol)
+- **Agent teams** — spawn teams of Claude instances with shared task coordination
+- **Session routing** — switch between projects, broadcast to all, or target specific sessions
+- **CLI** — manage sessions from the terminal
+- **Prompt tags** — toggle instructions (use superpowers, TDD, be concise) appended to messages
+
+## How It Works
+
+```
+You (Telegram / Web / CLI)
+       ↓
+Hub Daemon (manages everything)
+  ├── Socket Server (Unix socket)
+  │     ↕ shim ↔ Claude session A
+  │     ↕ shim ↔ Claude session B
+  │     ↕ shim ↔ Claude session C
+  ├── Telegram Bot
+  ├── Web Dashboard
+  └── Permission Engine
+```
+
+Each Claude session runs with `--channels server:hub`. The hub's **shim** (MCP server) bridges Claude's stdio to the daemon via Unix socket. The daemon routes messages between your frontends and all connected sessions.
+
+## Prerequisites
+
+Before installing, make sure you have:
+
+- **[Bun](https://bun.sh) >= 1.0** — the installer will offer to install it for you if missing
+- **[tmux](https://github.com/tmux/tmux)** — required for daemon and session management
+  - Debian/Ubuntu: `apt install tmux`
+  - RHEL/Fedora: `dnf install tmux`
+  - macOS: `brew install tmux`
+- **[Claude Code](https://claude.ai/code)** with claude.ai login
+- **git** — to clone the repository
+- **jq** (recommended) — for automatic config updates
+- **A Telegram bot token** (optional) — create one with [@BotFather](https://t.me/BotFather) if you want the Telegram frontend
+
+## Quick Install
+
+One-liner that handles everything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mahdi-awadi/channelhub/main/install.sh | bash
+```
+
+This will:
+1. Check prerequisites (install Bun if missing)
+2. Clone ChannelHub to `~/.channelhub`
+3. Install dependencies
+4. Create config template at `~/.claude/channels/hub/config.json`
+5. Register the MCP server in `~/.claude.json`
+6. Install the `channelhub` command to `~/.local/bin`
+
+### Configure
+
+Edit `~/.claude/channels/hub/config.json` and add your Telegram token and user ID:
+
+```json
+{
+  "webPort": 3000,
+  "telegramToken": "<bot-token-from-botfather>",
+  "telegramAllowFrom": ["<your-telegram-user-id>"],
+  "defaultTrust": "ask",
+  "defaultUploadDir": "."
+}
+```
+
+Get your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
+
+### Start
+
+```bash
+channelhub start              # Start the daemon in tmux
+channelhub status             # Check if it's running
+channelhub attach             # View daemon logs (Ctrl+B then D to detach)
+```
+
+### Connect Claude Code
+
+In any project folder:
+
+```bash
+claude --dangerously-load-development-channels server:hub
+```
+
+Your session appears in the dashboard at `http://localhost:3000` immediately.
+
+### CLI Commands
+
+```bash
+channelhub start       # Start daemon
+channelhub stop        # Stop daemon
+channelhub restart     # Restart daemon
+channelhub status      # Status
+channelhub attach      # Attach to daemon tmux
+channelhub update      # Pull latest and restart
+channelhub list        # List sessions
+channelhub send <name> "message"
+channelhub spawn <name> <path>
+channelhub trust <name> auto
+```
+
+## Manual Install
+
+If you prefer to install manually instead of the one-liner:
+
+```bash
+git clone https://github.com/mahdi-awadi/channelhub.git ~/.channelhub
+cd ~/.channelhub
+bun install
+
+# Create config
+mkdir -p ~/.claude/channels/hub
+cp config.example.json ~/.claude/channels/hub/config.json
+$EDITOR ~/.claude/channels/hub/config.json
+
+# Register MCP server — add to ~/.claude.json mcpServers:
+# "hub": { "command": "bun", "args": ["run", "~/.channelhub/src/shim.ts"] }
+
+# Start daemon
+tmux new-session -d -s hub-daemon "bun run ~/.channelhub/src/daemon.ts"
+```
+
+## Telegram Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/list` | Show sessions, pick active (inline buttons) |
+| `/status` | Dashboard with session details |
+| `/spawn <name> <path> [team-size]` | Launch Claude in tmux |
+| `/kill <name>` | Stop a session |
+| `/team <name> [add]` | Show team status or add teammate |
+| `/trust <name> [auto\|ask]` | Toggle auto-approve permissions |
+| `/prefix <name> <text>` | Set command prefix for a session |
+| `/rename <old> <new>` | Rename a session |
+| `/all <message>` | Broadcast to all sessions |
+
+**Message routing:**
+- Plain text goes to your active session
+- `/<session-name> message` targets a specific session
+- Send a photo or document to upload it to the active session's project folder
+
+## Web Dashboard
+
+Access at `http://localhost:<webPort>` (or via reverse proxy).
+
+- **Telegram login** — only allowlisted users can access
+- **Session sidebar** — status dots, team grouping, `[+]` to add teammates
+- **Chat view** — send messages, see replies, permission prompts with Allow/Always Allow/Deny
+- **File upload** — clip button or drag-and-drop
+- **Prompt tags** — toggleable pills (Superpowers, TDD, Concise, etc.)
+- **Spawn dialog** — directory browser, team checkbox
+
+## Permission Relay
+
+When Claude wants to run a tool (Bash, Write, etc.), the permission prompt appears in both the terminal AND your Telegram/web dashboard. You can approve from either place — first response wins.
+
+```
+Claude wants to use Bash → permission_request → Hub → Telegram/Web
+You click Allow → Hub → Claude proceeds
+```
+
+- **Trusted sessions** (`auto-approve`): auto-allowed, you never see the prompt
+- **Untrusted sessions** (`ask`): forwarded with Allow / Always Allow / Deny buttons
+
+## Agent Teams
+
+Spawn multiple Claude instances that work together:
+
+- **Web UI:** check "Run as team" when spawning, set team size
+- **Telegram:** `/spawn myproject /home/user/project 3` (1 lead + 2 teammates)
+- **Add teammates later:** `[+]` button in web, or `/team myproject add` in Telegram
+
+The hub monitors `~/.claude/tasks/` for agent team task files and displays progress.
+
+## Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webPort` | number | 3000 | Web dashboard and API port |
+| `telegramToken` | string | `""` | Bot token from [@BotFather](https://t.me/BotFather) |
+| `telegramAllowFrom` | string[] | `[]` | Telegram user IDs allowed (empty = allow all) |
+| `defaultTrust` | `"ask"` \| `"auto-approve"` | `"ask"` | Default permission mode for new sessions |
+| `defaultUploadDir` | string | `"."` | Upload directory relative to project root |
+
+Config file: `~/.claude/channels/hub/config.json`
+
+## CLI
+
+```bash
+HUB_URL=http://localhost:3000 bun run src/cli.ts <command>
+```
+
+| Command | Example |
+|---------|---------|
+| `list` | Show all sessions |
+| `status` | Detailed session info |
+| `spawn <name> <path>` | Launch Claude in tmux |
+| `kill <name>` | Stop a session |
+| `send <name> <message>` | Send message to session |
+| `trust <name> auto` | Set auto-approve |
+| `prefix <name> <text>` | Set command prefix |
+| `rename <old> <new>` | Rename session |
+| `upload <name> <file>` | Upload file to project |
+
+## Exposing the Web Dashboard
+
+The web dashboard runs on localhost by default. To access it remotely, use any reverse proxy:
+
+- **Nginx / Traefik / Caddy** — point your domain to `http://localhost:<webPort>`, ensure WebSocket passthrough
+- **Tailscale / ngrok / Cloudflare Tunnel** — for quick remote access without a domain
+- **SSH tunnel** — `ssh -L 3000:localhost:3000 your-server`
+
+The dashboard uses Telegram Login Widget for authentication, so configure your bot's domain in @BotFather (`/setdomain`) if exposing publicly.
+
+## Prerequisites
+
+- [Bun](https://bun.sh) >= 1.0
+- [tmux](https://github.com/tmux/tmux) (for daemon and session management)
+- [Claude Code](https://claude.ai/code) with claude.ai login
+- A Telegram bot token (optional, for Telegram frontend)
+
+## Development
+
+```bash
+bun test              # 65 tests
+bun run src/daemon.ts # start daemon
+bun run src/cli.ts    # CLI tool
+```
+
+## Plugin Status
+
+> **ChannelHub is not yet on the approved marketplace.** During the research preview, custom channels must use `--dangerously-load-development-channels server:hub` to run. This flag bypasses the allowlist check for your specific server entry. Permission relay and all other channel features work normally.
+
+The project is structured as a Claude Code channel plugin and ready to submit to the [official marketplace](https://platform.claude.com/plugins/submit). Once approved, users will be able to install it with `/plugin install channelhub@marketplace` and use `--channels plugin:channelhub@marketplace` without the development flag.
+
+## License
+
+[Apache-2.0](LICENSE)
