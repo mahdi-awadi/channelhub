@@ -126,7 +126,7 @@ export class ScreenManager {
 
     // 2. Ask Claude to exit. Since Claude is the tmux window's only process,
     //    its exit causes tmux to close the window and the session disappears.
-    try { await $`tmux send-keys -t ${sessionName} "/exit" Enter`.quiet() } catch {}
+    try { await $`tmux send-keys -t ${sessionName} /exit Enter`.quiet() } catch {}
 
     // 3. Poll for the session to disappear on its own, up to GRACEFUL_TIMEOUT.
     const deadline = Date.now() + GRACEFUL_TIMEOUT
@@ -136,6 +136,12 @@ export class ScreenManager {
         return
       }
       await new Promise(r => setTimeout(r, GRACEFUL_POLL_INTERVAL))
+    }
+
+    // Final check after the poll window closes, in case the session died during the last sleep.
+    if (!(await this.isSessionRunning(sessionName))) {
+      this.managed.delete(name)
+      return
     }
 
     // 4. Fallback: Claude didn't respond in time, hard-kill tmux.
