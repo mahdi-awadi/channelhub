@@ -1,75 +1,124 @@
-# Smart Permissions & Drift Prevention — Design Spec
+# Phase 1: Smart Sessions — Design Spec
 
 ## Overview
 
-Two related pain points solved together:
+Phase 1 is a coordinated set of features that make Claude Code sessions smarter, less interrupting, and harder to derail. Everything in this phase is built around one organizing concept: **profiles**.
 
-1. **Approval fatigue** — Channelhub currently forwards every tool permission prompt to the user. That means interruptions for trivial things like `Read` or `Glob`, and the user has to sit at their phone approving routine actions. Work halts until the user responds.
+A profile is a reusable bundle of session configuration: trust level, behavioral rules, runtime facts, reply style per frontend, and verification commands. When a user spawns a session they pick a profile, and the profile's fields become the session's starting config. Users can override individual fields later — the profile is a baseline, not a lock.
 
-2. **Claude drift** — Claude Code loses focus on project rules during long sessions. Instructions in `CLAUDE.md` are read once and forgotten. Reminders like "this MCP is dev, not prod" or "no shortcuts when fixing bugs" have to be re-stated by the user, often after Claude has already made a mistake.
+Profiles make it possible to define "how we work on production backend" once and apply it to every session a teammate spawns for that project. Without profiles, the same rules and facts would have to be re-typed for every session, which defeats the purpose of having them at all.
 
-Both problems share a common solution: **channelhub sits between the user and Claude**, so it can inspect messages flowing in both directions and make intelligent decisions on the user's behalf.
+## Problems Solved
+
+1. **Approval fatigue** — Channelhub currently forwards every tool permission prompt. Work halts for trivial things like `Read` or `Glob` that should be auto-allowed.
+
+2. **Claude drift** — Claude loses focus on project rules during long sessions. `CLAUDE.md` is read once then forgotten. Reminders have to be manually re-stated.
+
+3. **False "done" claims** — Claude writes code and says "done" without actually running tests. Users discover failures later.
+
+4. **Mobile file blindness** — Claude replies with bare file paths ("spec saved to docs/...") which mobile users can't open. No formatting, no emoji, no inline content.
+
+5. **Config sprawl** — Rules, facts, trust levels, and verification commands have to be reconfigured for every new session, often from scratch.
 
 ## Architectural Principle: Sidecar Claude
 
-Channelhub uses two different "Claudes":
+Channelhub uses two different Claude processes:
 
 | Role | Implementation | Purpose |
 |------|---------------|---------|
-| **Main Claude** | Full Claude Code session (MCP channel) | User-facing work with project context, persistent memory, tools, skills |
+| **Main Claude** | Full Claude Code session over MCP channel | User-facing work with project context, persistent memory, tools, skills |
 | **Sidecar Claude** | `claude --bare --print` subprocess | Stateless, fast, no project context — answers quick yes/no questions for the daemon |
 
-The sidecar is a classification tool, not a user-facing session. Each call is fresh. It costs nothing beyond the user's existing subscription. It's used for:
+The sidecar is a classification tool, not a user-facing session. Each call is fresh and self-contained. It costs nothing beyond the user's existing subscription. Used for:
 
-- Deciding if a Bash command is dangerous
-- Checking if Claude's reply violates project rules
-- Summarizing session activity
-- Routing messages to the right session
-- Generating natural correction messages when drift is detected
+- Classifying ambiguous permission requests (is this Bash command dangerous?)
+- Judging drift (does this reply violate the rules?)
+- Generating natural correction messages
+- Interpreting long verification output
+- Routing messages to the right session when unspecified
 
-## Feature 1: Smart Permission Classification
+## Feature 1: Profile System (foundation)
 
-### Tool Categories
+### Profile Structure
 
-Each permission request is classified into one of four buckets:
+```typescript
+type Profile = {
+  name: string                    // "prod-backend", "dev-frontend"
+  description?: string
+  trust: TrustLevel               // strict | ask | auto | yolo
+  rules: string[]                 // behavioral constraints
+  facts: string[]                 // runtime context
+  prefix: string                  // free-form message prefix
+  channelOverrides?: Partial<Record<FrontendSource, string>>
+  verification?: {
+    commands: string[]            // e.g., ["npm test", "npm run lint"]
+    triggerPhrases?: string[]     // phrases that trigger verification (defaults: "done", "finished", "implemented")
+    timeoutSec?: number           // default 120
+  }
+}
+```
+
+### Storage
+
+Profiles are stored globally in `~/.claude/channels/hub/profiles.json` (one file, array of profiles). Sessions reference the applied profile name but hold their own copy of the fields — so deleting or editing a profile doesn't break running sessions. Propagating edits is a separate concern for a future phase.
+
+### Built-in Profiles
+
+Ship with four battle-tested profiles users can pick immediately:
+
+**`careful`** — production work
+- trust: `strict`
+- rules: "no shortcuts, no hacks, always test before claiming done, no force-push, no history rewrite, no deploys without approval"
+- verification: auto-detected from project (npm test, cargo test, pytest)
+
+**`tdd`** — test-driven development
+- trust: `ask`
+- rules: "write failing test first, never skip tests, never comment out tests, no implementation without a test"
+- verification: required on every completion claim
+
+**`docs`** — documentation work
+- trust: `ask`
+- rules: "use markdown with H2/H3 hierarchy, all code examples must be runnable, add TOC for docs over 500 words, no jargon without definition"
+
+**`yolo`** — disposable experiments
+- trust: `yolo`
+- rules: []
+- verification: disabled
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/profiles` | List all profiles |
+| `/profile <name>` | Show profile details |
+| `/profile create <name>` | Create new profile (starts blank or from current session) |
+| `/profile edit <name>` | Edit a profile (opens the web UI for structured editing) |
+| `/profile delete <name>` | Delete a profile |
+| `/profile export <name>` | Get JSON export of profile (for sharing) |
+| `/profile import` | Import a profile from JSON (paste in reply) |
+
+### Spawn integration
+
+Web spawn dialog gains a profile dropdown. Telegram `/spawn` gains an optional `--profile <name>` flag. CLI `channelhub spawn` gains the same flag. No profile selected means "blank session with defaults", which is the current behavior.
+
+### Sharing
+
+Profiles export and import as JSON. Users share them via git, slack, or any text channel. A team lead defines `prod-backend` once, exports the JSON, teammates import it. Future enhancement: profile sync via git URL.
+
+## Feature 2: Smart Permission Classification
+
+Every permission request is classified into one of four categories:
 
 | Category | Examples | Default Behavior |
 |----------|----------|------------------|
-| **Silent** | `Read`, `Glob`, `Grep`, `LS`, `TodoWrite`, `TaskOutput`, `WebFetch`, `WebSearch` | Auto-allow instantly. Not logged in user-facing timeline. |
-| **Logged** | `Edit`/`Write` within project, `Bash` with benign commands (`ls`, `cat`, `npm test`, `git status`) | Auto-allow. Recorded in the session activity log so user can see what happened. |
-| **Review** | `Edit`/`Write` outside project, `Bash` with commands needing judgment (`npm install`, `pip install`, `docker run`) | Auto-allow IF session trust is `auto`, else escalate to user. |
-| **Dangerous** | `Bash` with `rm -rf /`, `sudo`, `drop table`, `git push --force`, `chmod 777`, `curl ... \| sh` | Always escalate to user regardless of trust level. |
+| **Silent** | `Read`, `Glob`, `Grep`, `LS`, `TodoWrite`, `TaskOutput`, `WebFetch`, `WebSearch` | Auto-allow instantly, not logged in timeline |
+| **Logged** | `Edit`/`Write` within project, benign `Bash` (`ls`, `cat`, `npm test`, `git status`) | Auto-allow, recorded in activity log |
+| **Review** | `Edit`/`Write` outside project, `Bash` with installs (`npm install`, `pip install`, `docker run`) | Auto-allow if trust=auto, else escalate |
+| **Dangerous** | `Bash` with `rm -rf /`, `sudo`, `drop table`, `git push --force`, `chmod 777`, `curl \| sh` | Always escalate regardless of trust |
 
-### Classification Layers
+### Trust Levels
 
-Classification runs as a 3-layer fast-to-slow pipeline:
-
-1. **L1 — Static map** (~0.1ms): Known tool names map directly to a category. `Read` → Silent. `WebFetch` → Silent. `Bash` → needs deeper inspection.
-
-2. **L2 — Regex rules** (~1ms): For `Bash`, `Write`, `Edit`, run pattern checks on the arguments:
-   - `rm\s+-rf\s+/`, `sudo`, `chmod\s+777`, `git\s+push\s+.*--force`, `drop\s+(table|database)`, `truncate\s+table`, `>\s*/dev/sd`, `mkfs`, `dd\s+if=`, `eval\s*\(`, `curl.*\|\s*(bash|sh)`
-   - If any dangerous pattern matches → **Dangerous**, escalate.
-   - If only benign patterns match → Logged, auto-allow.
-   - Otherwise → fall through to L3.
-
-3. **L3 — Sidecar Claude** (~1–3s, cached): Ambiguous cases go to sidecar Claude with a structured prompt:
-   ```
-   Classify this tool use as one of: SILENT, LOGGED, REVIEW, DANGEROUS.
-   Answer in this exact format: CATEGORY|one-line-reason
-   
-   Tool: Bash
-   Command: npm install --save-dev @types/node
-   Project: /home/user/frontend
-   ```
-   → `LOGGED|standard dev dependency install in project`
-
-### Classification Cache
-
-Sidecar calls are cached by (tool_name, normalized_args_hash). Repeated identical requests hit the cache and return instantly. Cache expires after 1 hour to handle project changes. Cache is per-session, not global, so `rm -rf node_modules` in a project-root session stays safe while the same command elsewhere gets re-evaluated.
-
-### Trust Levels (per session)
-
-The existing `trust` field on `SessionState` gains new values:
+The session trust level (inherited from its profile) decides what happens to Logged and Review categories:
 
 | Trust Level | Silent | Logged | Review | Dangerous |
 |-------------|--------|--------|--------|-----------|
@@ -78,238 +127,327 @@ The existing `trust` field on `SessionState` gains new values:
 | `auto` | Allow | Allow | Allow | Escalate |
 | `yolo` | Allow | Allow | Allow | Allow (with warning log) |
 
-`strict` is for sensitive projects where even file writes should be reviewed.
-`yolo` is for disposable scratch sessions where nothing matters.
+Backwards compatibility: existing `auto-approve` migrates to `auto` on first load.
 
-## Feature 2: Drift Prevention
+### Classification Pipeline
 
-Three related mechanisms to keep Claude on track.
+Runs as a 3-layer fast-to-slow pipeline:
 
-### Persistent Rules (per session)
+1. **L1 — Static map** (~0.1ms): Known tool names map directly to a category.
+2. **L2 — Regex rules** (~1ms): For `Bash`, `Write`, `Edit`, run pattern checks on arguments:
+   - Dangerous patterns: `rm\s+-rf\s+/`, `sudo`, `chmod\s+777`, `git\s+push\s+.*--force`, `drop\s+(table|database)`, `truncate`, `>\s*/dev/sd`, `mkfs`, `dd\s+if=`, `eval\s*\(`, `curl.*\|\s*(bash|sh)`
+   - Benign patterns: `ls`, `cat`, `echo`, `git status`, `npm test`, `cargo test`, `pytest` (in project dir)
+3. **L3 — Sidecar Claude** (~1-3s, cached): Ambiguous cases get semantic judgment from sidecar with a structured prompt.
 
-Users define rules that get automatically injected on every message they send to a session.
+### Classification Cache
 
-```
-/rules awafi no shortcuts when fixing bugs, use TDD workflow, no bare commits
-```
+Sidecar results cached by `(tool_name, normalized_args_hash)` with 1-hour TTL, per-session scope. Repeated identical requests hit the cache instantly.
 
-On each outbound message from the user, channelhub silently appends:
-```
-[Session Rules: no shortcuts when fixing bugs, use TDD workflow, no bare commits]
-```
+## Feature 3: Drift Prevention
 
-This is similar to the existing `prefix` feature but structured as rules with their own storage, management commands, and visibility in the dashboard. Prefix remains for free-form prepending; rules are for behavioral constraints.
+### Injection Engine
 
-### Channel Instructions (built-in, per-frontend)
-
-Claude Code doesn't know it's talking to a phone through Telegram or a browser through the web dashboard. By default it replies as if it's in a terminal: plain text, file paths without content, no formatting. This causes real problems:
-
-- Mobile users can't browse the filesystem, so a reply like "spec saved to docs/.../file.md" is useless — they can't open the file.
-- Telegram and the web UI both render markdown beautifully, but Claude doesn't use it by default.
-- Superpowers skills (brainstorming, writing-plans, etc.) regularly save files and reference them by path only.
-
-Channelhub ships with built-in instructions per frontend, auto-prepended to every inbound message so Claude adapts its reply style.
-
-**Telegram (mobile-first):**
-> You are replying on Telegram mobile. Use markdown formatting, emoji prefixes (✅ ❌ ⚠️ 🔄 📝), bold for emphasis, and fenced code blocks. When you create, save, or reference a file (especially .md specs, configs, or new code files), paste the full file contents in your reply — mobile users cannot browse the filesystem. Keep replies concise but complete.
-
-**Web dashboard (desktop):**
-> You are replying on the web dashboard. Use markdown, code blocks, tables, and emoji. For files, show a summary or diff; long content is fine since the dashboard has scroll. Prefer structured output over walls of text.
-
-**CLI:**
-> You are replying via CLI. Plain text only, no markdown, no emoji. Keep output terminal-friendly and concise.
-
-Instructions are injected as the first block on every inbound message, before rules and facts:
+On every outbound message from a user to a session, channelhub prepends three context blocks in order:
 
 ```
 [Channel: {frontend-specific instructions}]
-[Session Rules: {user rules}]
-[Facts: {user facts}]
+[Session Rules: {rules from profile + session overrides}]
+[Facts: {facts from profile + session overrides}]
 
 {original user message}
 ```
 
-Users can override via `/channel <name> <custom instructions>` if they need different behavior for a specific session. Overrides replace the default entirely for that session and frontend.
+Claude sees all three blocks as part of the user's message and respects them.
 
-### Fallback: auto-fetch file content
+### Channel Instructions (built-in defaults)
 
-Channel instructions are the primary mechanism, but some flows (particularly Superpowers skills that manage their own output) may still emit bare file paths. As a safety net, channelhub scans Claude's replies for "saved to:" / "written to:" / "spec saved:" patterns followed by a file path. If it finds one and the file exists and is under 50KB of text, channelhub sends a follow-up channel message with the file contents as a code block. Rate-limited to one auto-fetch per reply, only on file types that are safe to display (text, json, yaml, md, ts, js, py, etc.). Binary files are skipped.
+Claude Code doesn't know it's talking to a phone through Telegram or a browser through the web dashboard. Ship with per-frontend defaults:
 
-### Context Facts (per session)
+**Telegram** (mobile-first):
+> You are replying on Telegram mobile. Use markdown formatting, emoji prefixes (✅ ❌ ⚠️ 🔄 📝), bold for emphasis, and fenced code blocks. When you create, save, or reference a file (especially .md specs, configs, or new code files), paste the full file contents in your reply — mobile users cannot browse the filesystem. Keep replies concise but complete.
 
-Facts are runtime truths about the project that Claude needs to know:
+**Web**:
+> You are replying on the web dashboard. Use markdown, code blocks, tables, and emoji. For files, show a summary or diff; long content is fine since the dashboard has scroll. Prefer structured output over walls of text.
 
-```
-/fact awafi the database MCP is dev, not prod. Always check schema before writing.
-/fact awafi Bob owns the auth module. Don't touch src/auth/ without asking.
-/fact awafi this branch cannot be force-pushed — it's shared with the mobile team.
-```
+**CLI**:
+> You are replying via CLI. Plain text only, no markdown, no emoji. Keep output terminal-friendly and concise.
 
-Facts are appended to every outbound message after rules:
-```
-[Session Rules: ...]
-[Facts: the database MCP is dev, not prod. Bob owns auth module. No force-push on this branch.]
-```
+Profiles can override these via `channelOverrides` field.
 
-Facts differ from rules semantically but share the same injection mechanism. The distinction matters for the dashboard UI (rules are behavioral, facts are informational) but the wire format is identical.
+### Auto-fetch Fallback
+
+If Claude still emits bare file paths despite channel instructions, channelhub scans replies for "saved to:", "written to:", "spec saved:" patterns followed by a file path. If the file exists, is under 50KB, and has a safe extension (md, json, yaml, ts, js, py, go, rs, txt), channelhub sends a follow-up channel message with the content as a code block. One auto-fetch per reply maximum.
+
+### Rules (behavioral constraints)
+
+Rules come from the profile's `rules` array plus any session-level additions. Users add them via `/rules <session> <text>`. Rules are injected on every inbound message.
+
+Example profile rules for `prod-backend`:
+- "No shortcuts, no hacks, always root-cause bugs"
+- "Never force-push or rewrite history on this branch"
+- "Always run tests before claiming done"
+
+### Facts (runtime context)
+
+Facts differ from rules semantically — they're truths about the project, not behavioral constraints. Examples:
+- "The database MCP is pointing at dev, not prod. Always check the schema first."
+- "Bob owns the auth module. Don't touch src/auth/ without asking."
+- "This branch is shared with the mobile team. No force-push."
+
+Facts are injected on every inbound message alongside rules.
 
 ### Drift Detection
 
 After every reply Claude sends back through the channel, channelhub runs a drift check:
 
-1. **Fast path — regex scan**: look for anti-pattern phrases (`quick fix`, `let me just`, `TODO`, `for now`, `I'll ignore`, `commenting out`, `skip for now`, `hack`). If none match, skip the slow path.
+1. **Fast path — regex scan**: Look for anti-patterns (`quick fix`, `let me just`, `TODO`, `for now`, `I'll ignore`, `commenting out`, `hack`, `skip for now`). If none match, skip the slow path.
 
-2. **Slow path — sidecar judgment**: if regex matched or every N messages (configurable), ask sidecar Claude:
+2. **Slow path — sidecar judgment**: When regex matches or every N messages (configurable), ask sidecar Claude:
    ```
-   A Claude Code session has these rules: [rules]
-   And these facts: [facts]
+   A Claude Code session has these rules: {rules}
+   And these facts: {facts}
    
    Claude just replied:
    ---
-   {reply-excerpt-last-500-chars}
+   {reply-last-500-chars}
    ---
    
    Does this reply violate any rules or ignore any facts?
-   Answer: YES|<rule>|<1-sentence-correction> or NO
+   Answer: YES|{rule}|{one-sentence-correction} or NO
    ```
 
-3. **Correction injection**: if sidecar says YES, channelhub immediately sends a correction message to the session through the channel:
-   ```
-   ⚠️ Drift check: {rule}. {correction}
-   ```
+3. **Correction injection**: If sidecar says YES, channelhub sends a correction message to the session:
+   > ⚠️ Drift check: {rule}. {correction}
 
-The correction comes from sidecar Claude, so it's natural-language and context-aware. The main Claude sees it as a new user message and course-corrects.
+The correction comes from sidecar Claude, so it's natural and context-aware. The main Claude sees it as a new user message and course-corrects.
 
 ### Drift Rate Limiting
 
-To avoid runaway feedback loops:
-- Max 1 correction per 30 seconds per session.
-- Sidecar drift checks are debounced — only runs after Claude's reply stream ends, not on every token.
-- If three corrections fire within 5 minutes, channelhub escalates to the user with "Claude keeps drifting on rule X — please intervene."
+- Max 1 correction per 30 seconds per session
+- Sidecar drift checks debounced — only run after Claude's reply stream ends
+- If 3 corrections fire within 5 minutes, escalate to user: "Claude keeps drifting on rule X — please intervene"
+
+## Feature 4: Verification Runner
+
+Claude's habit of saying "done" without running tests is solved with deterministic subprocess verification defined in the profile.
+
+### Trigger
+
+Channelhub scans Claude's replies for completion phrases (from the profile's `triggerPhrases` or defaults: `done`, `finished`, `completed`, `implemented`, `all set`). When a trigger phrase is detected and the profile has verification commands defined, the runner kicks in.
+
+### Execution
+
+The runner executes profile commands sequentially in the session's project directory:
+
+```bash
+cd /home/user/project
+npm test && npm run lint && npm run typecheck
+```
+
+Each command has a timeout (default 120s). Stdout and stderr are captured.
+
+### Result Injection
+
+**All pass:**
+> ✅ **Verified done** — `npm test` passed (15 tests), lint clean, typecheck clean.
+
+**Any fail:**
+The failing output is sent back to the session as a channel message:
+```
+⚠️ Verification failed. You said done but:
+
+$ npm test
+FAIL src/auth.test.ts
+  ✗ should reject expired tokens (12ms)
+    Expected 401, received 200
+
+Please fix and run verification again.
+```
+
+If the output is over 2000 chars, sidecar Claude summarizes it first ("tldr: 3 tests failing in auth.test.ts, all related to token expiration").
+
+Claude sees the failure as a new user message and iterates. Verification runs again on the next completion claim.
+
+### Proactive "no tests run" warning
+
+Channelhub tracks whether Claude invoked Bash with a test command during the session. If Claude claims "done" without ever running a test, channelhub intervenes:
+> ⚠️ You said done, but you haven't run any tests in this session. Running verification now...
+
+### Project-type auto-detection
+
+When creating a profile, channelhub can pre-populate `verification.commands` based on detected project type:
+
+| Detected file | Default commands |
+|---------------|------------------|
+| `package.json` | `npm test`, `npm run lint` (if script exists), `npm run typecheck` (if script exists) |
+| `Cargo.toml` | `cargo check`, `cargo test`, `cargo clippy` |
+| `pyproject.toml` | `pytest`, `ruff check` (if installed) |
+| `go.mod` | `go build ./...`, `go test ./...` |
+| `tsconfig.json` | `tsc --noEmit` |
 
 ## Storage
 
-New fields on `SessionConfig`:
+Add to `SessionConfig`:
 
 ```typescript
 export type TrustLevel = 'strict' | 'ask' | 'auto' | 'yolo'
-// was: 'ask' | 'auto-approve'
 
 export type SessionConfig = {
+  // existing fields
   name: string
-  trust: TrustLevel
-  prefix: string              // existing — free-form prepend
+  prefix: string
   uploadDir: string
   managed: boolean
   teamIndex: number
   teamSize: number
-  rules: string[]             // NEW — behavioral constraints
-  facts: string[]             // NEW — runtime context
-  channelOverrides?: Partial<Record<FrontendSource, string>>  // NEW — per-frontend custom instructions
+
+  // new / changed
+  trust: TrustLevel             // was 'ask' | 'auto-approve'
+  appliedProfile?: string       // NEW — name of profile used at spawn
+  rules: string[]               // NEW — from profile, can be extended per session
+  facts: string[]               // NEW — from profile, can be extended per session
+  channelOverrides?: Partial<Record<FrontendSource, string>>  // NEW
+  verification?: {              // NEW
+    commands: string[]
+    triggerPhrases?: string[]
+    timeoutSec?: number
+  }
 }
 ```
 
-Backwards compatibility: migrate `auto-approve` → `auto` on load.
+New file: `~/.claude/channels/hub/profiles.json` with the array of profiles.
 
-Classification cache lives in memory only — not persisted. Rebuilt on daemon restart.
+The classification cache and drift-check state are in-memory only, not persisted.
 
 ## Module Layout
 
 ```
 src/
-  sidecar.ts             # NEW — wraps `claude --bare --print` with timeout + cache
-  classifier.ts          # NEW — 3-layer permission classification (L1 static, L2 regex, L3 sidecar)
+  profile-manager.ts     # NEW — load/save profiles, apply to session, export/import
+  sidecar.ts             # NEW — wraps `claude --bare --print` with long-lived process + cache
+  classifier.ts          # NEW — 3-layer permission classification
   drift-detector.ts      # NEW — regex + sidecar drift check after Claude replies
-  rules-engine.ts        # NEW — rules/facts injection on outbound messages
+  rules-engine.ts        # NEW — channel/rules/facts injection on outbound messages
+  verification-runner.ts # NEW — subprocess verification on completion phrases
   permission-engine.ts   # EXTEND — use classifier + honor new trust levels
-  message-router.ts      # EXTEND — inject rules/facts via rules-engine on outbound
-  daemon.ts              # EXTEND — wire drift-detector to tool_call "reply" events
-  types.ts               # EXTEND — new TrustLevel values, rules/facts fields
-  frontends/telegram.ts  # EXTEND — /rules, /facts, /fact, /trust with new levels
-  frontends/web.ts       # EXTEND — rules/facts UI, classification log view
+  message-router.ts      # EXTEND — inject context via rules-engine
+  session-registry.ts    # EXTEND — new fields, profile application
+  daemon.ts              # EXTEND — wire drift-detector + verification-runner to tool_call events
+  types.ts               # EXTEND — new TrustLevel, Profile, extended SessionConfig
+  frontends/telegram.ts  # EXTEND — /profile, /rules, /fact, /channel, /verify commands
+  frontends/web.ts       # EXTEND — profile manager UI, spawn profile picker, activity log
 ```
 
-## User Interface Changes
+## User Interface
 
 ### Telegram Commands
 
 | Command | Description |
 |---------|-------------|
-| `/rules <name> <text>` | Add a rule to session. Multiple rules separated by commas. |
-| `/rules <name>` | Show current rules for a session. |
-| `/rules <name> clear` | Remove all rules. |
-| `/fact <name> <text>` | Add a context fact. |
-| `/facts <name>` | Show current facts. |
-| `/facts <name> clear` | Remove all facts. |
-| `/trust <name> strict\|ask\|auto\|yolo` | Set session trust level (existing, extended). |
-| `/channel <name> <text>` | Override the default channel instructions for this session (per current frontend). |
-| `/channel <name> reset` | Revert to default channel instructions. |
+| `/profiles` | List all profiles |
+| `/profile <name>` | Show profile details |
+| `/profile create <name>` | Create new profile |
+| `/profile delete <name>` | Delete a profile |
+| `/profile export <name>` | Export profile as JSON |
+| `/profile import` | Import profile from JSON reply |
+| `/spawn <name> <path> [--profile <p>] [team-size]` | Spawn with optional profile |
+| `/rules <session>` | Show session rules |
+| `/rules <session> <text>` | Add rule(s) to session |
+| `/rules <session> clear` | Clear session rules |
+| `/fact <session> <text>` | Add fact to session |
+| `/facts <session>` | Show session facts |
+| `/channel <session> <text>` | Override channel instructions |
+| `/channel <session> reset` | Revert to default channel instructions |
+| `/trust <session> strict\|ask\|auto\|yolo` | Set trust level |
+| `/verify <session>` | Manually trigger verification |
 
 ### Web Dashboard
 
-- **Per-session panel** shows rules and facts as editable lists (add/remove with buttons).
-- **Activity log** for each session showing all tool uses classified as `Logged` or higher, with the classification reason visible on hover.
-- **Drift events** appear in the activity log with a warning icon and the correction that was sent.
-- **Trust level selector** in the session header replaces the current toggle.
+- **Profile manager page**: list, create, edit, delete, import, export profiles
+- **Spawn dialog**: profile dropdown + per-field override checkboxes
+- **Session panel**: editable rules, facts, channel override, verification config
+- **Activity log**: all tool uses classified as Logged/Review/Dangerous with classification reason
+- **Drift events** in the activity log with warning icon and correction text
+- **Verification results** in the activity log with pass/fail badges
 
 ## Hub vs Claude Responsibilities
 
 | Responsibility | Hub | Main Claude | Sidecar Claude |
 |---|---|---|---|
-| Classify permission request | ✅ (L1/L2) | — | ✅ (L3 ambiguous) |
-| Send allow/deny | ✅ | — | — |
+| Define profiles | ✅ | — | — |
+| Apply profile to session | ✅ | — | — |
+| Inject rules/facts/channel on messages | ✅ | — | — |
+| Classify permission (L1/L2) | ✅ | — | — |
+| Classify permission (L3 ambiguous) | ✅ (orchestrates) | — | ✅ |
+| Allow/deny tool use | ✅ | — | — |
 | Execute the tool | — | ✅ | — |
-| Apply rules to messages | ✅ | — | — |
-| Detect drift in replies | ✅ (regex) | — | ✅ (semantic) |
+| Detect drift (regex) | ✅ | — | — |
+| Detect drift (semantic) | ✅ (orchestrates) | — | ✅ |
 | Generate correction text | — | — | ✅ |
-| Act on corrections | — | ✅ | — |
-
-Channelhub is the policy layer. Main Claude does the work. Sidecar Claude is the advisor.
+| Run verification commands | ✅ (subprocess) | — | — |
+| Summarize verification output | ✅ (orchestrates) | — | ✅ (if long) |
+| Apply corrections | — | ✅ | — |
 
 ## Rollout Plan
 
-Phase 1 ships in three increments so each can be validated independently:
+Phase 1 ships in five sub-phases. Each is independently shippable and delivers value on its own.
 
-**1a. Classification & Trust Levels**
-- New `TrustLevel` type
-- Static + regex classifier (no sidecar yet)
-- Existing permission engine uses classifier
-- `/trust` command updated
+### 1a — Profile System + Trust Levels
+- `Profile` type, `profile-manager.ts`, `profiles.json` storage
+- New `TrustLevel` values (`strict`/`ask`/`auto`/`yolo`), migration from old values
+- `/profile` and `/profiles` commands (Telegram, CLI)
+- Web: profile manager page, spawn dialog profile dropdown
+- Built-in profiles: `careful`, `tdd`, `docs`, `yolo`
+- Spawn integration: `--profile` flag applies profile fields to new session
 
-**1b. Sidecar Integration**
-- `sidecar.ts` module with process pool and cache
-- L3 layer added to classifier
-- Drift detector regex layer
+### 1b — Smart Permission Classification (L1 + L2)
+- `classifier.ts` with static map and regex rules
+- Extend `permission-engine.ts` to honor new trust levels
+- Activity log for Logged/Review events (web UI only, Telegram silent)
+- No sidecar yet — ambiguous cases escalate to user
 
-**1c. Rules, Facts, Channel Instructions & Sidecar Drift**
-- `rules-engine.ts` with injection (channel instructions + rules + facts in that order)
-- Built-in per-frontend channel instructions
-- Auto-fetch fallback for bare file paths in replies
+### 1c — Sidecar Claude + L3 Classification
+- `sidecar.ts` with long-lived process pool and in-memory cache
+- Add L3 layer to classifier for ambiguous cases
+- Add `/sidecar status` diagnostic command
+
+### 1d — Rules, Facts, Channel Instructions, Drift Detection
+- `rules-engine.ts` with injection pipeline
+- Built-in channel instructions per frontend
 - `/rules`, `/fact`, `/channel` commands
-- Web UI for rules/facts/channel overrides
-- Sidecar-based drift detection with correction injection
+- Auto-fetch fallback for bare file paths
+- `drift-detector.ts` with regex + sidecar layers
+- Rate-limited correction injection
 
-Each increment is shippable — 1a alone already dramatically reduces approval fatigue.
+### 1e — Verification Runner
+- `verification-runner.ts` with completion phrase detection
+- Subprocess execution with timeout
+- Auto-detect project type for default verification commands
+- "No tests run" proactive warning
+- Long-output summarization via sidecar
 
-## Already Working (not in scope for this phase)
+## Already Working (not in this phase)
 
-- **Voice transcription** — Telegram and mobile keyboards already do this client-side. Voice messages arrive as text.
-- **File uploads** — photos, screenshots, and documents can already be sent via Telegram or the web UI and are saved to the active session's project folder. Claude reads them from the path in the notification.
+- Voice transcription — Telegram and mobile keyboards already transcribe client-side
+- File uploads — photos, screenshots, documents already saved to project folder
 
 ## Non-Goals
 
-- **Not building scheduled messages** — separate phase.
-- **Not building event reactions (webhook → Claude)** — separate phase.
-- **Not doing session replay/timeline beyond the basic activity log** — the activity log is a side effect of classification, not a standalone feature.
-- **Not touching agent teams logic** — existing behavior preserved.
+- Scheduled messages — separate phase
+- Event reactions / webhook triggers — separate phase
+- Session timeline / replay beyond the basic activity log — separate phase
+- Agent teams changes — existing behavior preserved
+- Profile sync across machines via git URL — future enhancement
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |------|-----------|
-| Sidecar latency delays permission responses | L1/L2 handle 80% of cases in <1ms. L3 runs only on ambiguous cases, target <2s with cache. User never waits more than they would for the manual approval flow. |
-| Sidecar wrong answers | Conservative defaults: if sidecar output is malformed or times out, fall back to "escalate to user". Never auto-allow on uncertainty. |
-| Rules injection confuses Claude | Rules are wrapped in `[Session Rules: ...]` brackets at the end of user messages. Format is explicit enough that Claude treats them as constraints, not as part of the user's request. |
-| Drift corrections flood the session | Rate-limited: 1 correction per 30s, max 3 per 5 minutes before escalating to user. |
-| Classification cache goes stale | 1-hour TTL. Per-session scope prevents cross-session poisoning. |
-| Sidecar subprocess overhead | Single long-lived sidecar process with stdin/stdout pipe — avoid spawning a new `claude --bare` per call. Batched requests where possible. |
+| Sidecar latency slows permission responses | L1/L2 handle ~80% of cases in <1ms. L3 only runs for ambiguous cases with <2s target and cache. Single long-lived sidecar process avoids per-call startup. |
+| Sidecar wrong answers | Conservative fallback: malformed output or timeout → "escalate to user". Never auto-allow on uncertainty. |
+| Injection confuses Claude | Structured bracket format `[Channel: ...] [Session Rules: ...] [Facts: ...]` is explicit enough for Claude to treat as constraints. Tested in the prompt templates. |
+| Drift corrections create feedback loops | Rate-limited: 1 per 30s, max 3 per 5 minutes before escalating to user. |
+| Verification commands hang | Per-command timeout (default 120s), killed on exceed. Failure surfaced as "verification timed out". |
+| Profile deletion breaks sessions | Sessions hold their own copy of profile fields at spawn time. Profile deletion only affects future spawns. |
+| Classification cache stale | 1-hour TTL, per-session scope. Rebuild on daemon restart. |
+| Built-in profiles don't match user's project | User can always pick "None" or edit/clone a built-in into a custom profile. |
