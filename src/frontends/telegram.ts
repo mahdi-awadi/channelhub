@@ -1,12 +1,14 @@
 // src/frontends/telegram.ts
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
-import type { SessionState, PermissionRequest, TrustLevel } from '../types'
+import type { SessionState, PermissionRequest, TrustLevel, Profile } from '../types'
 import type { SessionRegistry } from '../session-registry'
 import type { MessageRouter } from '../message-router'
 import type { PermissionEngine } from '../permission-engine'
 import type { ScreenManager } from '../screen-manager'
 import type { SocketServer } from '../socket-server'
 import type { TaskMonitor } from '../task-monitor'
+import { getProfile } from '../profiles'
+import { loadProfilesForHub, saveProfilesForHub } from '../config'
 
 // ── Pure helper functions ────────────────────────────────────────────────────
 
@@ -170,23 +172,116 @@ export class TelegramFrontend {
       await ctx.reply(formatStatus(sessions), { parse_mode: 'HTML' })
     })
 
-    // /spawn <name> <path> [teamSize]
-    bot.command('spawn', async (ctx) => {
+    // /profiles — list all profiles
+    bot.command('profiles', async (ctx) => {
       if (!this.isAllowed(ctx)) return
-      const args = ctx.match?.trim().split(/\s+/) ?? []
-      if (args.length < 2 || !args[0] || !args[1]) {
-        await ctx.reply('Usage: /spawn <name> <path>')
+      const profiles = loadProfilesForHub()
+      if (profiles.length === 0) {
+        await ctx.reply('No profiles defined.')
         return
       }
+      const lines = profiles.map(p => {
+        const desc = p.description ? ` — ${p.description}` : ''
+        return `• <b>${p.name}</b> (${p.trust})${desc}`
+      })
+      await ctx.reply(`<b>Profiles:</b>\n${lines.join('\n')}`, { parse_mode: 'HTML' })
+    })
+
+    // /profile <name> | /profile create <name> | /profile delete <name>
+    bot.command('profile', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const args = ctx.match?.trim().split(/\s+/) ?? []
+      if (args.length === 0 || !args[0]) {
+        await ctx.reply('Usage: /profile <name> | /profile create <name> | /profile delete <name>')
+        return
+      }
+      const action = args[0]
+      const profiles = loadProfilesForHub()
+
+      if (action === 'create' && args[1]) {
+        const name = args[1]
+        if (getProfile(name, profiles)) {
+          await ctx.reply(`Profile "${name}" already exists`)
+          return
+        }
+        const newProfile: Profile = {
+          name,
+          description: 'User-created profile',
+          trust: 'ask',
+          rules: [],
+          facts: [],
+          prefix: '',
+        }
+        saveProfilesForHub([...profiles, newProfile])
+        await ctx.reply(`✅ Created profile "${name}"`)
+        return
+      }
+
+      if (action === 'delete' && args[1]) {
+        const name = args[1]
+        const filtered = profiles.filter(p => p.name !== name)
+        saveProfilesForHub(filtered)
+        await ctx.reply(`🗑 Deleted profile "${name}"`)
+        return
+      }
+
+      // Show profile details
+      const profile = getProfile(action, profiles)
+      if (!profile) {
+        await ctx.reply(`Profile "${action}" not found`)
+        return
+      }
+      const lines = [
+        `<b>Profile: ${profile.name}</b>`,
+        profile.description ? `<i>${profile.description}</i>` : '',
+        `Trust: <code>${profile.trust}</code>`,
+        `Rules (${profile.rules.length}):`,
+        ...profile.rules.map(r => `  • ${r}`),
+        `Facts (${profile.facts.length}):`,
+        ...profile.facts.map(f => `  • ${f}`),
+      ].filter(Boolean)
+      await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
+    })
+
+    // /spawn <name> <path> [--profile <name>] [teamSize]
+    bot.command('spawn', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const rawArgs = ctx.match?.trim().split(/\s+/) ?? []
+      if (rawArgs.length < 2) {
+        await ctx.reply('Usage: /spawn <name> <path> [--profile <name>] [team-size]')
+        return
+      }
+
+      // Parse --profile flag
+      let profileName: string | undefined
+      const args: string[] = []
+      for (let i = 0; i < rawArgs.length; i++) {
+        if (rawArgs[i] === '--profile' && rawArgs[i + 1]) {
+          profileName = rawArgs[i + 1]
+          i++
+        } else {
+          args.push(rawArgs[i])
+        }
+      }
+
       const [name, projectPath, sizeStr] = args
       const teamSize = sizeStr ? parseInt(sizeStr) : 1
+
+      if (profileName) {
+        const profiles = loadProfilesForHub()
+        if (!getProfile(profileName, profiles)) {
+          await ctx.reply(`Profile "${profileName}" not found. Use /profiles to see available.`)
+          return
+        }
+      }
+
       try {
         if (teamSize > 1) {
-          await this.screenManager.spawnTeam(name, projectPath, teamSize)
-          await ctx.reply(`Spawned team ${name} (${teamSize} agents) at ${projectPath}`)
+          await this.screenManager.spawnTeam(name, projectPath, teamSize, undefined, profileName)
+          await ctx.reply(`Spawned team ${name} (${teamSize} agents) at ${projectPath}${profileName ? ` with profile ${profileName}` : ''}`)
         } else {
-          await this.screenManager.spawn(name, projectPath)
-          await ctx.reply(`Spawned session ${name} at ${projectPath}`)
+          await this.screenManager.spawn(name, projectPath, undefined, profileName)
+          await ctx.reply(`Spawned ${name} at ${projectPath}${profileName ? ` with profile ${profileName}` : ''}`)
         }
       } catch (err) {
         await ctx.reply(`Failed to spawn: ${err}`)
