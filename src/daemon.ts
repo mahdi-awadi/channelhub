@@ -1,6 +1,6 @@
 // src/daemon.ts
 import { join } from 'path'
-import { loadHubConfig, loadSessions, saveSessions, HUB_DIR } from './config'
+import { loadHubConfig, loadSessions, saveSessions, loadProfilesForHub, saveProfilesForHub, HUB_DIR } from './config'
 import { SessionRegistry } from './session-registry'
 import { SocketServer } from './socket-server'
 import { PermissionEngine } from './permission-engine'
@@ -9,10 +9,21 @@ import { ScreenManager } from './screen-manager'
 import { TaskMonitor } from './task-monitor'
 import { TelegramFrontend } from './frontends/telegram'
 import { WebFrontend } from './frontends/web'
-import type { PermissionRequest } from './types'
+import type { PermissionRequest, Profile } from './types'
 
 const config = loadHubConfig()
 const savedSessions = loadSessions()
+
+let profiles: Profile[] = loadProfilesForHub()
+process.stderr.write(`hub: loaded ${profiles.length} profiles\n`)
+
+export function getProfiles(): Profile[] {
+  return profiles
+}
+
+export function reloadProfiles(): void {
+  profiles = loadProfilesForHub()
+}
 
 const SOCKET_PATH = process.env.HUB_SOCKET ?? join(HUB_DIR, 'hub.sock')
 
