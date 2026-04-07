@@ -87,3 +87,42 @@ describe('classify Bash dangerous patterns', () => {
     expect(result).not.toBe('dangerous')
   })
 })
+
+describe('classify Bash benign commands', () => {
+  const project = '/home/user/project'
+
+  test('ls → logged', () => {
+    expect(classify('Bash', { command: 'ls' }, project)).toBe('logged')
+  })
+  test('ls -la → logged', () => {
+    expect(classify('Bash', { command: 'ls -la' }, project)).toBe('logged')
+  })
+  test('cat foo.txt → logged', () => {
+    expect(classify('Bash', { command: 'cat foo.txt' }, project)).toBe('logged')
+  })
+  test('pwd → logged', () => {
+    expect(classify('Bash', { command: 'pwd' }, project)).toBe('logged')
+  })
+  test('git status → logged', () => {
+    expect(classify('Bash', { command: 'git status' }, project)).toBe('logged')
+  })
+  test('git diff → logged', () => {
+    expect(classify('Bash', { command: 'git diff HEAD~1' }, project)).toBe('logged')
+  })
+  test('npm test → logged', () => {
+    expect(classify('Bash', { command: 'npm test' }, project)).toBe('logged')
+  })
+  test('cargo test → logged', () => {
+    expect(classify('Bash', { command: 'cargo test' }, project)).toBe('logged')
+  })
+  test('pytest → logged', () => {
+    expect(classify('Bash', { command: 'pytest tests/' }, project)).toBe('logged')
+  })
+  test('composite command cd /tmp && ls → review', () => {
+    // Composites are not benign — fall to review
+    expect(classify('Bash', { command: 'cd /tmp && ls' }, project)).toBe('review')
+  })
+  test('unknown command vim → review', () => {
+    expect(classify('Bash', { command: 'vim foo.txt' }, project)).toBe('review')
+  })
+})
