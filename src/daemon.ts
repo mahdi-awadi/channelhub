@@ -136,6 +136,7 @@ socketServer.on('permission_request', (path: string, msg: any) => {
     toolName: msg.toolName,
     description: msg.description,
     inputPreview: msg.inputPreview,
+    toolArgs: msg.toolArgs,  // NEW
   })
   if (response) {
     socketServer.sendToSession(path, {

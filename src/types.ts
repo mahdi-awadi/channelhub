@@ -92,7 +92,7 @@ export type PermissionResponse = {
 export type ShimToDaemon =
   | { type: 'register'; cwd: string }
   | { type: 'tool_call'; name: string; arguments: Record<string, unknown> }
-  | { type: 'permission_request'; requestId: string; toolName: string; description: string; inputPreview: string }
+  | { type: 'permission_request'; requestId: string; toolName: string; description: string; inputPreview: string; toolArgs?: Record<string, unknown> }
 
 export type DaemonToShim =
   | { type: 'registered'; sessionName: string }

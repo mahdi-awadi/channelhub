@@ -153,12 +153,25 @@ function main() {
     }),
     async ({ params }) => {
       process.stderr.write(`hub shim: received permission_request: ${params.tool_name} (${params.request_id})\n`)
+      // Try to parse input_preview as JSON for structured args
+      let toolArgs: Record<string, unknown> = {}
+      try {
+        const parsed = JSON.parse(params.input_preview)
+        if (parsed && typeof parsed === 'object') {
+          toolArgs = parsed
+        }
+      } catch {
+        // input_preview may be truncated or non-JSON; provide a fallback
+        toolArgs = { command: params.input_preview }
+      }
+
       sendToDaemon({
         type: 'permission_request',
         requestId: params.request_id,
         toolName: params.tool_name,
         description: params.description,
         inputPreview: params.input_preview,
+        toolArgs,
       })
     },
   )
