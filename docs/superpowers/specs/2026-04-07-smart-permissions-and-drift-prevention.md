@@ -100,6 +100,41 @@ On each outbound message from the user, channelhub silently appends:
 
 This is similar to the existing `prefix` feature but structured as rules with their own storage, management commands, and visibility in the dashboard. Prefix remains for free-form prepending; rules are for behavioral constraints.
 
+### Channel Instructions (built-in, per-frontend)
+
+Claude Code doesn't know it's talking to a phone through Telegram or a browser through the web dashboard. By default it replies as if it's in a terminal: plain text, file paths without content, no formatting. This causes real problems:
+
+- Mobile users can't browse the filesystem, so a reply like "spec saved to docs/.../file.md" is useless — they can't open the file.
+- Telegram and the web UI both render markdown beautifully, but Claude doesn't use it by default.
+- Superpowers skills (brainstorming, writing-plans, etc.) regularly save files and reference them by path only.
+
+Channelhub ships with built-in instructions per frontend, auto-prepended to every inbound message so Claude adapts its reply style.
+
+**Telegram (mobile-first):**
+> You are replying on Telegram mobile. Use markdown formatting, emoji prefixes (✅ ❌ ⚠️ 🔄 📝), bold for emphasis, and fenced code blocks. When you create, save, or reference a file (especially .md specs, configs, or new code files), paste the full file contents in your reply — mobile users cannot browse the filesystem. Keep replies concise but complete.
+
+**Web dashboard (desktop):**
+> You are replying on the web dashboard. Use markdown, code blocks, tables, and emoji. For files, show a summary or diff; long content is fine since the dashboard has scroll. Prefer structured output over walls of text.
+
+**CLI:**
+> You are replying via CLI. Plain text only, no markdown, no emoji. Keep output terminal-friendly and concise.
+
+Instructions are injected as the first block on every inbound message, before rules and facts:
+
+```
+[Channel: {frontend-specific instructions}]
+[Session Rules: {user rules}]
+[Facts: {user facts}]
+
+{original user message}
+```
+
+Users can override via `/channel <name> <custom instructions>` if they need different behavior for a specific session. Overrides replace the default entirely for that session and frontend.
+
+### Fallback: auto-fetch file content
+
+Channel instructions are the primary mechanism, but some flows (particularly Superpowers skills that manage their own output) may still emit bare file paths. As a safety net, channelhub scans Claude's replies for "saved to:" / "written to:" / "spec saved:" patterns followed by a file path. If it finds one and the file exists and is under 50KB of text, channelhub sends a follow-up channel message with the file contents as a code block. Rate-limited to one auto-fetch per reply, only on file types that are safe to display (text, json, yaml, md, ts, js, py, etc.). Binary files are skipped.
+
 ### Context Facts (per session)
 
 Facts are runtime truths about the project that Claude needs to know:
@@ -170,6 +205,7 @@ export type SessionConfig = {
   teamSize: number
   rules: string[]             // NEW — behavioral constraints
   facts: string[]             // NEW — runtime context
+  channelOverrides?: Partial<Record<FrontendSource, string>>  // NEW — per-frontend custom instructions
 }
 ```
 
@@ -206,6 +242,8 @@ src/
 | `/facts <name>` | Show current facts. |
 | `/facts <name> clear` | Remove all facts. |
 | `/trust <name> strict\|ask\|auto\|yolo` | Set session trust level (existing, extended). |
+| `/channel <name> <text>` | Override the default channel instructions for this session (per current frontend). |
+| `/channel <name> reset` | Revert to default channel instructions. |
 
 ### Web Dashboard
 
@@ -243,10 +281,12 @@ Phase 1 ships in three increments so each can be validated independently:
 - L3 layer added to classifier
 - Drift detector regex layer
 
-**1c. Rules, Facts & Sidecar Drift**
-- `rules-engine.ts` with injection
-- `/rules` and `/fact` commands
-- Web UI for rules/facts
+**1c. Rules, Facts, Channel Instructions & Sidecar Drift**
+- `rules-engine.ts` with injection (channel instructions + rules + facts in that order)
+- Built-in per-frontend channel instructions
+- Auto-fetch fallback for bare file paths in replies
+- `/rules`, `/fact`, `/channel` commands
+- Web UI for rules/facts/channel overrides
 - Sidecar-based drift detection with correction injection
 
 Each increment is shippable — 1a alone already dramatically reduces approval fatigue.
