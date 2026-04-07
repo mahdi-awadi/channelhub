@@ -249,7 +249,7 @@ export class TelegramFrontend {
         await ctx.reply(`Session not found: ${name}`)
         return
       }
-      await this.screenManager.kill(name)
+      await this.screenManager.gracefulKill(name)
       this.registry.unregister(path)
       await ctx.reply(`Killed session ${name}`)
     })
