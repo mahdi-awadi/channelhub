@@ -2,7 +2,7 @@
 import { createServer, type Server, type Socket } from 'net'
 import { unlinkSync } from 'fs'
 import type { SessionRegistry } from './session-registry'
-import type { ShimToDaemon, DaemonToShim } from './types'
+import type { ShimToDaemon, DaemonToShim, Profile } from './types'
 import { EventEmitter } from 'events'
 
 export class SocketServer extends EventEmitter {
@@ -10,6 +10,7 @@ export class SocketServer extends EventEmitter {
   private registry: SessionRegistry
   private socketPath: string
   private connections = new Map<string, Socket>()
+  onLookupProfile?: (folder: string) => { profile: Profile } | undefined
 
   constructor(registry: SessionRegistry, socketPath: string) {
     super()
@@ -90,9 +91,14 @@ export class SocketServer extends EventEmitter {
             return
           }
 
+          const profileInfo = this.onLookupProfile?.(folder)
           this.registry.register(sessionKey, {
             teamIndex: nextIndex,
             teamSize: team.length + 1,
+            trust: profileInfo?.profile?.trust ?? undefined,
+            prefix: profileInfo?.profile?.prefix ?? undefined,
+            appliedProfile: profileInfo?.profile?.name,
+            profileOverrides: {},
           })
         }
 

@@ -10,6 +10,7 @@ import { TaskMonitor } from './task-monitor'
 import { TelegramFrontend } from './frontends/telegram'
 import { WebFrontend } from './frontends/web'
 import type { PermissionRequest, Profile } from './types'
+import { getProfile } from './profiles'
 
 const config = loadHubConfig()
 const savedSessions = loadSessions()
@@ -59,6 +60,13 @@ taskMonitor.on('tasks:updated', () => {
 
 // Socket server
 const socketServer = new SocketServer(registry, SOCKET_PATH)
+
+socketServer.onLookupProfile = (folder: string) => {
+  const entry = screenManager.getManagedByPath(folder)
+  if (!entry?.profileName) return undefined
+  const profile = getProfile(entry.profileName, profiles)
+  return profile ? { profile } : undefined
+}
 
 // Message router
 const router = new MessageRouter(
