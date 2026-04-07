@@ -155,3 +155,30 @@ describe('classify Write/Edit by path', () => {
     expect(classify('Write', { file_path: '/home/user/projectother/foo' }, project)).toBe('review')
   })
 })
+
+describe('classify edge cases', () => {
+  const project = '/home/user/project'
+
+  test('empty bash command → review', () => {
+    expect(classify('Bash', { command: '' }, project)).toBe('review')
+  })
+  test('empty args → review', () => {
+    expect(classify('Bash', {}, project)).toBe('review')
+  })
+  test('rm with multiple flags → dangerous', () => {
+    expect(classify('Bash', { command: 'rm -f -r /home/user' }, project)).toBe('dangerous')
+  })
+  test('git push to specific remote (no force) → review', () => {
+    expect(classify('Bash', { command: 'git push origin main' }, project)).toBe('review')
+  })
+  test('sudo apt update → review (not dangerous)', () => {
+    const result = classify('Bash', { command: 'sudo apt update' }, project)
+    expect(result).not.toBe('dangerous')
+  })
+  test('nested path inside project → logged', () => {
+    expect(classify('Write', { file_path: '/home/user/project/src/deep/nested/file.ts' }, project)).toBe('logged')
+  })
+  test('file path exactly equals project path → logged', () => {
+    expect(classify('Write', { file_path: '/home/user/project' }, project)).toBe('logged')
+  })
+})
