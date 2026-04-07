@@ -144,6 +144,11 @@ export class WebFrontend {
           })
         }
 
+        if (url.pathname === '/api/activity' && req.method === 'GET') {
+          const activity = self.deps.permissions?.getActivity() ?? []
+          return Response.json(activity)
+        }
+
         return new Response('Not Found', { status: 404 })
       },
       websocket: {
