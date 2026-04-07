@@ -20,22 +20,42 @@ Profiles make it possible to define "how we work on production backend" once and
 
 5. **Config sprawl** — Rules, facts, trust levels, and verification commands have to be reconfigured for every new session, often from scratch.
 
-## Architectural Principle: Sidecar Claude
+## Architectural Principle: Deterministic First, Sidecar Rarely
 
-Channelhub uses two different Claude processes:
+Channelhub does classification and drift detection with **deterministic code** (static maps, regex, subprocess calls) — never with an LLM in the critical path. The user's Claude subscription has rate limits, and running an LLM on every permission check or every Claude reply would burn through them in a few hours of normal use.
 
-| Role | Implementation | Purpose |
-|------|---------------|---------|
-| **Main Claude** | Full Claude Code session over MCP channel | User-facing work with project context, persistent memory, tools, skills |
-| **Sidecar Claude** | `claude --bare --print` subprocess | Stateless, fast, no project context — answers quick yes/no questions for the daemon |
+`claude --print` (the "sidecar") is available as an **optional helper** for specific high-value tasks that run infrequently:
 
-The sidecar is a classification tool, not a user-facing session. Each call is fresh and self-contained. It costs nothing beyond the user's existing subscription. Used for:
+- Summarizing long verification output (only on failure, only if opt-in)
+- Manual user-triggered commands like `/ask-claude summarize this session`
 
-- Classifying ambiguous permission requests (is this Bash command dangerous?)
-- Judging drift (does this reply violate the rules?)
-- Generating natural correction messages
-- Interpreting long verification output
-- Routing messages to the right session when unspecified
+Sidecar is **off by default**. Profiles that want it set `sidecarEnabled: true`. Daemon tracks sidecar token usage per day so users can see the cost.
+
+| Role | Implementation | When used |
+|------|---------------|-----------|
+| **Main Claude** | Full Claude Code session over MCP channel | User's actual work — persistent, context-aware |
+| **Deterministic engine** | Static maps, regex, subprocess, templated messages | All classification, drift detection, rule injection, corrections, verification |
+| **Sidecar Claude** | `claude --print` subprocess | Opt-in, rare — long output summarization, manual commands |
+
+### Why no sidecar in critical path
+
+- **Latency**: `claude --print` spawns a fresh process each call (2–5s cold start + processing time). Putting it before every permission response would make the system feel broken.
+- **Token cost**: At ~550 tokens per drift check × 20 replies/hour × 10 sessions = 110k tokens/hour. That's a rate-limit-exceeding amount for any serious use.
+- **Reliability**: Regex and static lists are predictable. LLM output varies, has edge cases, can be wrong.
+- **Correctness without it**: Regex + "escalate on doubt" is safer than LLM classification, because uncertain cases go to the user rather than being auto-allowed.
+
+### Token budget estimate (revised approach)
+
+| Source | Daily cost |
+|--------|-----------|
+| Rules/facts injection (main Claude, already in context) | 0 additional |
+| Permission classification | 0 (regex only) |
+| Drift detection | 0 (regex only) |
+| Verification runner | 0 (subprocess) |
+| Auto-fetch file content | 0 (filesystem) |
+| Sidecar summarization (opt-in, rare) | ~1500 tokens × ~5 calls/day = **~7k tokens/day** |
+
+**Total Phase 1 overhead: < 10k tokens/day, well within rate limits.**
 
 ## Feature 1: Profile System (foundation)
 
@@ -50,9 +70,11 @@ type Profile = {
   facts: string[]                 // runtime context
   prefix: string                  // free-form message prefix
   channelOverrides?: Partial<Record<FrontendSource, string>>
+  driftDetection?: boolean        // default true — regex-only scan with user notification
+  sidecarEnabled?: boolean        // default false — opt-in LLM summarization for rare cases
   verification?: {
     commands: string[]            // e.g., ["npm test", "npm run lint"]
-    triggerPhrases?: string[]     // phrases that trigger verification (defaults: "done", "finished", "implemented")
+    sentinelPhrase?: string       // Claude must emit this to trigger verification, default "✅ COMPLETE"
     timeoutSec?: number           // default 120
   }
 }
@@ -131,17 +153,36 @@ Backwards compatibility: existing `auto-approve` migrates to `auto` on first loa
 
 ### Classification Pipeline
 
-Runs as a 3-layer fast-to-slow pipeline:
+Runs as a 2-layer deterministic pipeline. No LLM in the critical path:
 
-1. **L1 — Static map** (~0.1ms): Known tool names map directly to a category.
-2. **L2 — Regex rules** (~1ms): For `Bash`, `Write`, `Edit`, run pattern checks on arguments:
-   - Dangerous patterns: `rm\s+-rf\s+/`, `sudo`, `chmod\s+777`, `git\s+push\s+.*--force`, `drop\s+(table|database)`, `truncate`, `>\s*/dev/sd`, `mkfs`, `dd\s+if=`, `eval\s*\(`, `curl.*\|\s*(bash|sh)`
-   - Benign patterns: `ls`, `cat`, `echo`, `git status`, `npm test`, `cargo test`, `pytest` (in project dir)
-3. **L3 — Sidecar Claude** (~1-3s, cached): Ambiguous cases get semantic judgment from sidecar with a structured prompt.
+1. **L1 — Static map** (~0.1ms): Known tool names map directly to a category. `Read` → Silent. `WebFetch` → Silent. `TodoWrite` → Silent. `Bash`/`Write`/`Edit` → L2.
 
-### Classification Cache
+2. **L2 — Regex rules** (~1ms): For `Bash`, `Write`, `Edit`, scan arguments against conservative patterns:
+   - **Dangerous block-list** (explicit match → Dangerous):
+     - `rm\s+(-[rRf]+\s+)?(/(?![^/]*\.)\w*|~|\$HOME)` (rm targeting system paths)
+     - `sudo\s+(rm|dd|mkfs|chmod|chown)` (sudo with destructive commands)
+     - `chmod\s+-R?\s+777`
+     - `git\s+push\s+.*(-f|--force(-with-lease)?)`
+     - `git\s+reset\s+--hard\s+(origin|HEAD~)`
+     - `drop\s+(table|database|schema)`
+     - `truncate\s+table`
+     - `>\s*/dev/(sd|nvme|hd)`
+     - `mkfs\.`
+     - `dd\s+.*of=/dev/`
+     - `curl.*\|\s*(bash|sh|zsh)`
+     - `wget.*\|\s*(bash|sh|zsh)`
+   - **Benign allow-list for plain `Bash`** (first token matches → Logged):
+     - `ls`, `cat`, `echo`, `pwd`, `whoami`, `which`, `grep`, `find`, `head`, `tail`, `file`, `stat`, `wc`
+     - `git status`, `git log`, `git diff`, `git branch`, `git show`
+     - `npm test`, `npm run`, `cargo test`, `cargo check`, `pytest`, `go test`
+   - **Write/Edit targeting in-project path** → Logged; outside project → Review.
+   - **Everything else** → Review. No sidecar.
 
-Sidecar results cached by `(tool_name, normalized_args_hash)` with 1-hour TTL, per-session scope. Repeated identical requests hit the cache instantly.
+### Escalation on Uncertainty
+
+Regex gaps are handled conservatively. Anything that doesn't match a known block or allow pattern falls into **Review**, which escalates to the user based on trust level. This is the safest default: the cost of over-asking is low (user clicks Allow), the cost of missing a dangerous command is high.
+
+No cache is needed since classification is pure-function regex matching — running it again on the same input takes the same microseconds and produces the same result.
 
 ## Feature 3: Drift Prevention
 
@@ -196,44 +237,46 @@ Facts differ from rules semantically — they're truths about the project, not b
 
 Facts are injected on every inbound message alongside rules.
 
-### Drift Detection
+### Drift Detection (advisory only)
 
-After every reply Claude sends back through the channel, channelhub runs a drift check:
+After every reply Claude sends back through the channel, channelhub runs a regex-only drift scan. **No LLM, no auto-correction into the session** — detection is advisory and goes to the user, not back into Claude.
 
-1. **Fast path — regex scan**: Look for anti-patterns (`quick fix`, `let me just`, `TODO`, `for now`, `I'll ignore`, `commenting out`, `hack`, `skip for now`). If none match, skip the slow path.
+**Regex anti-patterns** scan the reply for suspicious phrases:
+- `\bquick\s+fix\b`, `\blet\s+me\s+just\b`, `\b(for|right)\s+now\b`, `\bI'?ll\s+(ignore|skip)\b`, `\bcommenting?\s+out\b`, `\bhack\b`, `\bTODO\b`, `\bFIXME\b`, `\bstub(bed)?\s+out\b`
 
-2. **Slow path — sidecar judgment**: When regex matches or every N messages (configurable), ask sidecar Claude:
-   ```
-   A Claude Code session has these rules: {rules}
-   And these facts: {facts}
-   
-   Claude just replied:
-   ---
-   {reply-last-500-chars}
-   ---
-   
-   Does this reply violate any rules or ignore any facts?
-   Answer: YES|{rule}|{one-sentence-correction} or NO
-   ```
+**On match**:
+- Channelhub sends a **notification to the user** (Telegram or web dashboard):
+  > ⚠️ Possible drift in `awafi`: Claude's reply contains "quick fix". Your rule says "no shortcuts". [View reply] [Ignore] [Send correction]
+- User decides whether to intervene
+- User can click "Send correction" to push a templated reminder back into the session
+- No auto-injection without user approval
 
-3. **Correction injection**: If sidecar says YES, channelhub sends a correction message to the session:
-   > ⚠️ Drift check: {rule}. {correction}
+**Why advisory not enforcing**: Auto-injecting corrections can trap Claude in feedback loops — Claude writes "for now", hub corrects, Claude writes "temporarily" in the next try, hub corrects again. The session becomes about rule compliance instead of work. User-in-the-loop avoids this.
 
-The correction comes from sidecar Claude, so it's natural and context-aware. The main Claude sees it as a new user message and course-corrects.
+**Correction template (when user clicks "Send correction")**:
+> ⚠️ Project rule reminder: {rule}. Your last reply contained "{matched phrase}" — please re-do this without shortcuts, root-causing the issue instead.
+
+Template is static — no LLM needed to generate it.
 
 ### Drift Rate Limiting
 
-- Max 1 correction per 30 seconds per session
-- Sidecar drift checks debounced — only run after Claude's reply stream ends
-- If 3 corrections fire within 5 minutes, escalate to user: "Claude keeps drifting on rule X — please intervene"
+- Max 1 drift notification per 2 minutes per session (prevents notification spam)
+- Notifications coalesce: if 3 anti-patterns match in one reply, user gets one notification with all three listed
+- Users can disable drift detection per profile with `driftDetection: false`
 
 ## Feature 4: Verification Runner
 
 Claude's habit of saying "done" without running tests is solved with deterministic subprocess verification defined in the profile.
 
-### Trigger
+### Trigger: Sentinel Phrase (not natural language)
 
-Channelhub scans Claude's replies for completion phrases (from the profile's `triggerPhrases` or defaults: `done`, `finished`, `completed`, `implemented`, `all set`). When a trigger phrase is detected and the profile has verification commands defined, the runner kicks in.
+Channelhub looks for an exact sentinel phrase in Claude's reply — not natural language. Default: `✅ COMPLETE`. Claude is told to emit this phrase via channel instructions only when work is genuinely done and ready for verification:
+
+> *Channel instruction:* "When you have fully completed a task and want the hub to run verification commands, end your reply with `✅ COMPLETE` on its own line. Don't use this phrase casually — only when the work is ready to be validated."
+
+This eliminates false positives from phrases like "I finished reading the file" or "once you're done." Only the exact sentinel triggers verification.
+
+Profiles can override the sentinel via `verification.sentinelPhrase`.
 
 ### Execution
 
@@ -264,7 +307,21 @@ FAIL src/auth.test.ts
 Please fix and run verification again.
 ```
 
-If the output is over 2000 chars, sidecar Claude summarizes it first ("tldr: 3 tests failing in auth.test.ts, all related to token expiration").
+If the output is over 2000 chars, channelhub truncates it to the first and last 1000 chars with an ellipsis marker in between:
+
+```
+$ npm test
+> jest
+
+  src/auth.test.ts
+    ✗ should reject expired tokens
+...[truncated 3241 chars]...
+      Expected 401, received 200
+
+Test Suites: 2 failed, 5 passed
+```
+
+If the profile has `sidecarEnabled: true`, the full output is sent to sidecar Claude for a 1-sentence summary instead of truncation. This is the only place in Phase 1 where sidecar runs automatically, and only on failed verifications. Daily cost estimate: ~1500 tokens × a few failures/day = well under 10k tokens/day.
 
 Claude sees the failure as a new user message and iterates. Verification runs again on the next completion claim.
 
@@ -273,70 +330,81 @@ Claude sees the failure as a new user message and iterates. Verification runs ag
 Channelhub tracks whether Claude invoked Bash with a test command during the session. If Claude claims "done" without ever running a test, channelhub intervenes:
 > ⚠️ You said done, but you haven't run any tests in this session. Running verification now...
 
-### Project-type auto-detection
+### Project-type auto-detection (with probing)
 
-When creating a profile, channelhub can pre-populate `verification.commands` based on detected project type:
+When creating a profile, channelhub pre-populates `verification.commands` by **probing** what actually exists — not just matching filenames. Detection rules:
 
-| Detected file | Default commands |
-|---------------|------------------|
-| `package.json` | `npm test`, `npm run lint` (if script exists), `npm run typecheck` (if script exists) |
-| `Cargo.toml` | `cargo check`, `cargo test`, `cargo clippy` |
-| `pyproject.toml` | `pytest`, `ruff check` (if installed) |
-| `go.mod` | `go build ./...`, `go test ./...` |
-| `tsconfig.json` | `tsc --noEmit` |
+| Detected file | Probe | Commands added |
+|---------------|-------|----------------|
+| `package.json` | Read `scripts` field | Only scripts that exist: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build` |
+| `Cargo.toml` | None | `cargo check`, `cargo test`, `cargo clippy` (Cargo always has these) |
+| `pyproject.toml` | `which pytest` + `which ruff` | Only installed tools |
+| `go.mod` | None | `go build ./...`, `go test ./...` |
+| `tsconfig.json` (without `package.json`) | None | `tsc --noEmit` |
+
+Detection runs once at profile creation. User can edit the commands manually afterward. Never writes a command that won't run — avoids "verification failed because script doesn't exist" false failures.
 
 ## Storage
 
-Add to `SessionConfig`:
+Change to `SessionConfig` — reference profile by name, store only overrides:
 
 ```typescript
 export type TrustLevel = 'strict' | 'ask' | 'auto' | 'yolo'
 
 export type SessionConfig = {
-  // existing fields
+  // existing fields (unchanged)
   name: string
-  prefix: string
   uploadDir: string
   managed: boolean
   teamIndex: number
   teamSize: number
 
-  // new / changed
-  trust: TrustLevel             // was 'ask' | 'auto-approve'
-  appliedProfile?: string       // NEW — name of profile used at spawn
-  rules: string[]               // NEW — from profile, can be extended per session
-  facts: string[]               // NEW — from profile, can be extended per session
-  channelOverrides?: Partial<Record<FrontendSource, string>>  // NEW
-  verification?: {              // NEW
-    commands: string[]
-    triggerPhrases?: string[]
-    timeoutSec?: number
-  }
+  // changed
+  trust: TrustLevel              // was 'ask' | 'auto-approve'
+
+  // NEW — profile linkage
+  appliedProfile?: string        // name of profile this session was spawned with
+  profileOverrides?: Partial<{   // fields that differ from the profile (if any)
+    rules: string[]
+    facts: string[]
+    prefix: string
+    channelOverrides: Partial<Record<FrontendSource, string>>
+    driftDetection: boolean
+    verification: { commands: string[]; sentinelPhrase?: string; timeoutSec?: number }
+  }>
 }
 ```
 
-New file: `~/.claude/channels/hub/profiles.json` with the array of profiles.
+**Resolution**: When the daemon needs a session's effective config, it merges `profile + profileOverrides`. If the profile was deleted, the overrides still work as a last-known-good fallback.
 
-The classification cache and drift-check state are in-memory only, not persisted.
+**Files**:
+- `~/.claude/channels/hub/profiles.json` — array of `Profile` objects
+- `~/.claude/channels/hub/sessions.json` — session registry (existing, extended)
+
+No caches persisted. Drift notification state (last-sent timestamps) is in-memory only.
 
 ## Module Layout
 
+Consolidated to 4 new files (down from 6):
+
 ```
 src/
-  profile-manager.ts     # NEW — load/save profiles, apply to session, export/import
-  sidecar.ts             # NEW — wraps `claude --bare --print` with long-lived process + cache
-  classifier.ts          # NEW — 3-layer permission classification
-  drift-detector.ts      # NEW — regex + sidecar drift check after Claude replies
-  rules-engine.ts        # NEW — channel/rules/facts injection on outbound messages
-  verification-runner.ts # NEW — subprocess verification on completion phrases
-  permission-engine.ts   # EXTEND — use classifier + honor new trust levels
-  message-router.ts      # EXTEND — inject context via rules-engine
-  session-registry.ts    # EXTEND — new fields, profile application
-  daemon.ts              # EXTEND — wire drift-detector + verification-runner to tool_call events
-  types.ts               # EXTEND — new TrustLevel, Profile, extended SessionConfig
+  profiles.ts            # NEW — Profile type, load/save, apply/resolve, rules/facts/channel injection
+  analysis.ts            # NEW — classifier (L1/L2 regex) + drift detector (regex) — pure functions
+  verification.ts        # NEW — subprocess verification runner + project probing
+  sidecar.ts             # NEW — optional `claude --print` wrapper, opt-in only
+  permission-engine.ts   # EXTEND — use classifier, honor new trust levels
+  message-router.ts      # EXTEND — inject context via profiles module
+  session-registry.ts    # EXTEND — profile reference + overrides resolution
+  daemon.ts              # EXTEND — wire drift detector, wire verification to sentinel phrase
+  types.ts               # EXTEND — TrustLevel, Profile, extended SessionConfig
   frontends/telegram.ts  # EXTEND — /profile, /rules, /fact, /channel, /verify commands
-  frontends/web.ts       # EXTEND — profile manager UI, spawn profile picker, activity log
+  frontends/web.ts       # EXTEND — profile manager UI, drift notifications, activity log
 ```
+
+`analysis.ts` holds **pure functions**: `classify(tool, args, projectPath) → Category` and `detectDrift(reply, rules) → DriftMatch[]`. No state, no LLM. Easy to unit-test exhaustively.
+
+`sidecar.ts` is imported only by `verification.ts` for optional long-output summarization. If `sidecarEnabled: false` (default for all built-in profiles), the sidecar module is never invoked.
 
 ## User Interface
 
@@ -372,59 +440,67 @@ src/
 
 ## Hub vs Claude Responsibilities
 
-| Responsibility | Hub | Main Claude | Sidecar Claude |
-|---|---|---|---|
-| Define profiles | ✅ | — | — |
-| Apply profile to session | ✅ | — | — |
-| Inject rules/facts/channel on messages | ✅ | — | — |
-| Classify permission (L1/L2) | ✅ | — | — |
-| Classify permission (L3 ambiguous) | ✅ (orchestrates) | — | ✅ |
-| Allow/deny tool use | ✅ | — | — |
-| Execute the tool | — | ✅ | — |
-| Detect drift (regex) | ✅ | — | — |
-| Detect drift (semantic) | ✅ (orchestrates) | — | ✅ |
-| Generate correction text | — | — | ✅ |
-| Run verification commands | ✅ (subprocess) | — | — |
-| Summarize verification output | ✅ (orchestrates) | — | ✅ (if long) |
-| Apply corrections | — | ✅ | — |
+| Responsibility | Hub (deterministic) | Main Claude | Sidecar (opt-in) | User |
+|---|---|---|---|---|
+| Define profiles | ✅ | — | — | — |
+| Apply profile to session | ✅ | — | — | — |
+| Inject rules/facts/channel on messages | ✅ | — | — | — |
+| Classify permission | ✅ (regex only) | — | — | — |
+| Escalate ambiguous permission | ✅ | — | — | ✅ (decides) |
+| Execute the tool | — | ✅ | — | — |
+| Detect drift | ✅ (regex only) | — | — | — |
+| Notify user of drift | ✅ | — | — | ✅ (receives) |
+| Decide whether to correct drift | — | — | — | ✅ |
+| Send correction template | ✅ (on user click) | — | — | — |
+| Apply correction to session | — | ✅ (reads it) | — | — |
+| Run verification commands | ✅ (subprocess) | — | — | — |
+| Truncate verification output | ✅ | — | — | — |
+| Summarize verification output | — | — | ✅ (only if opt-in) | — |
+
+**The user is back in the loop** for ambiguous decisions — no black-box LLM judgment deciding what runs. Sidecar is limited to one optional task (output summarization).
 
 ## Rollout Plan
 
-Phase 1 ships in five sub-phases. Each is independently shippable and delivers value on its own.
+Phase 1 ships in four sub-phases (down from five — sidecar removed as a standalone phase). Each is independently shippable and delivers user-visible value.
 
 ### 1a — Profile System + Trust Levels
-- `Profile` type, `profile-manager.ts`, `profiles.json` storage
-- New `TrustLevel` values (`strict`/`ask`/`auto`/`yolo`), migration from old values
-- `/profile` and `/profiles` commands (Telegram, CLI)
+- `Profile` type, `profiles.ts` module, `profiles.json` storage
+- New `TrustLevel` values (`strict`/`ask`/`auto`/`yolo`), migration from `auto-approve` → `auto`
+- `/profile`, `/profiles` commands (Telegram, CLI)
 - Web: profile manager page, spawn dialog profile dropdown
 - Built-in profiles: `careful`, `tdd`, `docs`, `yolo`
-- Spawn integration: `--profile` flag applies profile fields to new session
+- Spawn integration: `--profile <name>` flag
+- Session resolution: `profile + overrides` merge at read time
+- **Ships as:** "You can now pick a profile when spawning sessions, configure them centrally."
 
-### 1b — Smart Permission Classification (L1 + L2)
-- `classifier.ts` with static map and regex rules
-- Extend `permission-engine.ts` to honor new trust levels
+### 1b — Smart Permission Classification
+- `analysis.ts` with `classify()` pure function
+- Static map (L1) for known tools
+- Regex rules (L2) for Bash/Write/Edit arguments
+- Extend `permission-engine.ts` to use classifier + honor new trust levels
 - Activity log for Logged/Review events (web UI only, Telegram silent)
-- No sidecar yet — ambiguous cases escalate to user
+- Unit tests exhaustively covering the regex patterns (known-good, known-bad, edge cases)
+- **Ships as:** "No more permission prompts for Read/Glob/Grep. Dangerous commands still ask. Strict/ask/auto/yolo trust levels work."
 
-### 1c — Sidecar Claude + L3 Classification
-- `sidecar.ts` with long-lived process pool and in-memory cache
-- Add L3 layer to classifier for ambiguous cases
-- Add `/sidecar status` diagnostic command
-
-### 1d — Rules, Facts, Channel Instructions, Drift Detection
-- `rules-engine.ts` with injection pipeline
-- Built-in channel instructions per frontend
+### 1c — Rules, Facts, Channel Instructions, Drift Detection
+- Extend `profiles.ts` with injection pipeline (channel + rules + facts in order)
+- Built-in channel instructions per frontend (Telegram/Web/CLI)
+- Auto-fetch fallback for bare file paths in replies
+- `detectDrift()` pure function in `analysis.ts` (regex only)
+- Drift notifications to user (Telegram + web), never auto-injected into session
+- Drift correction templates (user clicks "Send correction" to apply)
 - `/rules`, `/fact`, `/channel` commands
-- Auto-fetch fallback for bare file paths
-- `drift-detector.ts` with regex + sidecar layers
-- Rate-limited correction injection
+- Telegram delivery handles 4096-char limit (chunk or document upload for large files)
+- **Ships as:** "Claude respects your rules and facts. Mobile users see file contents inline. Drift alerts you when Claude goes off track."
 
-### 1e — Verification Runner
-- `verification-runner.ts` with completion phrase detection
-- Subprocess execution with timeout
-- Auto-detect project type for default verification commands
-- "No tests run" proactive warning
-- Long-output summarization via sidecar
+### 1d — Verification Runner + Sidecar (optional)
+- `verification.ts` with subprocess runner
+- Sentinel phrase trigger (`✅ COMPLETE` by default)
+- Project probing for auto-detected commands
+- Per-command timeout, output capture, truncation for long output
+- `sidecar.ts` module for opt-in output summarization (`sidecarEnabled: true` in profile)
+- `/verify` command to manually trigger
+- **Ships as:** "Claude can't falsely claim done. Verification runs your real test suite, reports pass/fail back to the session. Sidecar Claude is available opt-in for failed-verification summarization."
 
 ## Already Working (not in this phase)
 
@@ -443,11 +519,16 @@ Phase 1 ships in five sub-phases. Each is independently shippable and delivers v
 
 | Risk | Mitigation |
 |------|-----------|
-| Sidecar latency slows permission responses | L1/L2 handle ~80% of cases in <1ms. L3 only runs for ambiguous cases with <2s target and cache. Single long-lived sidecar process avoids per-call startup. |
-| Sidecar wrong answers | Conservative fallback: malformed output or timeout → "escalate to user". Never auto-allow on uncertainty. |
-| Injection confuses Claude | Structured bracket format `[Channel: ...] [Session Rules: ...] [Facts: ...]` is explicit enough for Claude to treat as constraints. Tested in the prompt templates. |
-| Drift corrections create feedback loops | Rate-limited: 1 per 30s, max 3 per 5 minutes before escalating to user. |
-| Verification commands hang | Per-command timeout (default 120s), killed on exceed. Failure surfaced as "verification timed out". |
-| Profile deletion breaks sessions | Sessions hold their own copy of profile fields at spawn time. Profile deletion only affects future spawns. |
-| Classification cache stale | 1-hour TTL, per-session scope. Rebuild on daemon restart. |
-| Built-in profiles don't match user's project | User can always pick "None" or edit/clone a built-in into a custom profile. |
+| Permission classification too slow | L1/L2 is pure regex, microseconds per call. Zero LLM in critical path. |
+| Regex misses a dangerous command | Conservative defaults: unknown patterns fall to Review, which escalates to user in `strict`/`ask` trust. Only `auto` auto-allows Review — and that's the user's explicit choice. |
+| Regex false-positive on benign command | Benign allow-list uses first-token matching only. If a composite command (`cd /tmp && ls`) isn't matched, it falls to Review → escalates to user (annoying but safe). |
+| Drift regex high false-positive rate | Drift is advisory — user notification only, never auto-applied. User ignores false positives with one click. |
+| Drift feedback loops | Impossible by design: drift doesn't inject into session without user click. |
+| Rules injection ignored over time | Accepted risk — drift detection catches downstream violations; user can manually re-enforce. |
+| Sentinel phrase triggers too rarely | Channel instruction tells Claude when to use it. If Claude forgets, user can manually run `/verify <session>`. |
+| Verification commands hang | Per-command 120s timeout, killed on exceed. Failure reported as "verification timed out". |
+| Verification commands fail due to missing tools | Project probing at profile creation only writes commands that exist (checks `package.json` scripts, `which pytest`, etc.). |
+| Profile deletion breaks sessions | Sessions store `profileOverrides` — if profile is deleted, overrides remain as last-known-good. |
+| Token rate limit from sidecar | Sidecar is opt-in and rare (only failed-verification summarization). Default `sidecarEnabled: false`. Estimated <10k tokens/day even when enabled. |
+| Built-in profiles don't match user's project | User picks "None" (blank config) or clones a built-in and edits it. |
+| Mobile Telegram 4096-char limit on file content | Auto-fetch chunks content or sends as document attachment for large files. |
