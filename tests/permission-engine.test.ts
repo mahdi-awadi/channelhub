@@ -16,26 +16,28 @@ describe('PermissionEngine', () => {
     })
   })
 
-  test('auto-approve returns allow immediately', () => {
+  test('auto-approve allows Read tool immediately', () => {
     registry.register('/home/user/trusted')
     registry.setTrust('/home/user/trusted', 'auto')
     const result = engine.handle('/home/user/trusted', {
       requestId: 'abcde',
-      toolName: 'Bash',
-      description: 'run ls',
-      inputPreview: 'ls',
+      toolName: 'Read',
+      description: 'read a file',
+      inputPreview: '{}',
+      toolArgs: {},
     })
     expect(result).toEqual({ requestId: 'abcde', behavior: 'allow' })
     expect(forwarded.length).toBe(0)
   })
 
-  test('ask mode forwards to callback and returns null', () => {
+  test('ask mode forwards composite Bash to callback and returns null', () => {
     registry.register('/home/user/untrusted')
     const result = engine.handle('/home/user/untrusted', {
       requestId: 'fghij',
       toolName: 'Bash',
       description: 'run rm',
       inputPreview: 'rm -rf /',
+      toolArgs: { command: 'cd /tmp && rm foo' },
     })
     expect(result).toBeNull()
     expect(forwarded.length).toBe(1)
@@ -49,6 +51,7 @@ describe('PermissionEngine', () => {
       toolName: 'Bash',
       description: 'run rm',
       inputPreview: 'rm -rf /',
+      toolArgs: { command: 'cd /tmp && rm foo' },
     })
     const result = engine.resolve('fghij', 'deny')
     expect(result?.response).toEqual({ requestId: 'fghij', behavior: 'deny' })
@@ -57,5 +60,81 @@ describe('PermissionEngine', () => {
 
   test('resolve returns null for unknown requestId', () => {
     expect(engine.resolve('zzzzz', 'allow')).toBeNull()
+  })
+})
+
+describe('PermissionEngine classifier integration', () => {
+  test('Read tool always allowed regardless of trust', () => {
+    const reg = new SessionRegistry({ defaultTrust: 'strict', defaultUploadDir: '.' })
+    reg.register('/home/test:0')
+    const engine = new PermissionEngine(reg, () => {})
+    const result = engine.handle('/home/test:0', {
+      requestId: 'r1',
+      toolName: 'Read',
+      description: 'read',
+      inputPreview: '{}',
+      toolArgs: {},
+    })
+    expect(result?.behavior).toBe('allow')
+  })
+
+  test('Dangerous Bash allowed on yolo trust', () => {
+    const reg = new SessionRegistry({ defaultTrust: 'yolo', defaultUploadDir: '.' })
+    reg.register('/home/test:0')
+    const engine = new PermissionEngine(reg, () => {})
+    const result = engine.handle('/home/test:0', {
+      requestId: 'r1',
+      toolName: 'Bash',
+      description: 'rm',
+      inputPreview: '',
+      toolArgs: { command: 'rm -rf /' },
+    })
+    expect(result?.behavior).toBe('allow')
+  })
+
+  test('Dangerous Bash escalates on auto trust', () => {
+    const reg = new SessionRegistry({ defaultTrust: 'auto', defaultUploadDir: '.' })
+    reg.register('/home/test:0')
+    const forwarded: any[] = []
+    const engine = new PermissionEngine(reg, (req) => forwarded.push(req))
+    const result = engine.handle('/home/test:0', {
+      requestId: 'r1',
+      toolName: 'Bash',
+      description: 'rm',
+      inputPreview: '',
+      toolArgs: { command: 'rm -rf /' },
+    })
+    expect(result).toBeNull() // escalated
+    expect(forwarded.length).toBe(1)
+  })
+
+  test('Benign Bash allowed on ask trust', () => {
+    const reg = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    reg.register('/home/test:0')
+    const engine = new PermissionEngine(reg, () => {})
+    const result = engine.handle('/home/test:0', {
+      requestId: 'r1',
+      toolName: 'Bash',
+      description: 'ls',
+      inputPreview: '',
+      toolArgs: { command: 'ls' },
+    })
+    expect(result?.behavior).toBe('allow')
+  })
+
+  test('Benign Bash escalates on strict trust', () => {
+    const reg = new SessionRegistry({ defaultTrust: 'strict', defaultUploadDir: '.' })
+    reg.register('/home/test:0')
+    const forwarded: any[] = []
+    const engine = new PermissionEngine(reg, (req) => forwarded.push(req))
+    const result = engine.handle('/home/test:0', {
+      requestId: 'r1',
+      toolName: 'Bash',
+      description: 'ls',
+      inputPreview: '',
+      toolArgs: { command: 'ls' },
+    })
+    expect(result).toBeNull() // strict escalates even logged
+    expect(forwarded.length).toBe(1)
   })
 })

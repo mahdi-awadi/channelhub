@@ -1,17 +1,27 @@
 // src/permission-engine.ts
 import type { SessionRegistry } from './session-registry'
-import type { PermissionRequest, PermissionResponse } from './types'
+import type { PermissionRequest, PermissionResponse, Category, TrustLevel } from './types'
+import { classify } from './analysis'
 
 type PermissionInput = {
   requestId: string
   toolName: string
   description: string
   inputPreview: string
+  toolArgs?: Record<string, unknown>
 }
 
 type PendingPermission = {
   sessionPath: string
   requestId: string
+}
+
+function decideAction(category: Category, trust: TrustLevel): 'allow' | 'escalate' {
+  if (category === 'silent') return 'allow'
+  if (category === 'dangerous') return trust === 'yolo' ? 'allow' : 'escalate'
+  if (category === 'logged') return trust === 'strict' ? 'escalate' : 'allow'
+  if (category === 'review') return (trust === 'strict' || trust === 'ask') ? 'escalate' : 'allow'
+  return 'escalate'
 }
 
 export class PermissionEngine {
@@ -31,10 +41,16 @@ export class PermissionEngine {
     const session = this.registry.get(sessionPath)
     if (!session) return null
 
-    if (session.trust === 'auto') {
+    // Strip the :index suffix to get the actual project folder
+    const projectPath = sessionPath.replace(/:\d+$/, '')
+    const category = classify(input.toolName, input.toolArgs ?? {}, projectPath)
+    const action = decideAction(category, session.trust)
+
+    if (action === 'allow') {
       return { requestId: input.requestId, behavior: 'allow' }
     }
 
+    // Escalate to user
     this.pending.set(input.requestId, { sessionPath, requestId: input.requestId })
     this.onForward({
       sessionName: session.name,
