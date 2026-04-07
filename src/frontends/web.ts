@@ -28,7 +28,7 @@ type WebFrontendDeps = {
 export class WebFrontend {
   private deps: WebFrontendDeps
   private clients = new Set<import('bun').ServerWebSocket<unknown>>()
-  private server: import('bun').Server | null = null
+  private server: import('bun').Server<unknown> | null = null
   private _port: number
 
   constructor(deps: WebFrontendDeps) {
@@ -55,7 +55,7 @@ export class WebFrontend {
 
         // WebSocket upgrade
         if (url.pathname === '/ws') {
-          const upgraded = server.upgrade(req)
+          const upgraded = server.upgrade(req, { data: {} })
           if (upgraded) return undefined as unknown as Response
           return new Response('WebSocket upgrade failed', { status: 400 })
         }
@@ -166,7 +166,7 @@ export class WebFrontend {
       },
     })
 
-    this._port = this.server.port
+    this._port = this.server.port ?? this.deps.port
   }
 
   async stop(): Promise<void> {

@@ -1,5 +1,5 @@
 // src/frontends/telegram.ts
-import { Bot, GrammyError, InlineKeyboard } from 'grammy'
+import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { SessionState, PermissionRequest } from '../types'
 import type { SessionRegistry } from '../session-registry'
 import type { MessageRouter } from '../message-router'
@@ -348,16 +348,13 @@ export class TelegramFrontend {
         )
       } else if (data.startsWith('perm:allow:')) {
         const requestId = data.slice('perm:allow:'.length)
-        const response = this.permissions.resolve(requestId, 'allow')
-        if (response) {
-          const sessionPath = this.permissions.getSessionPath(requestId)
-          if (sessionPath) {
-            this.socketServer.sendToSession(sessionPath, {
-              type: 'permission_response',
-              requestId: response.requestId,
-              behavior: response.behavior,
-            })
-          }
+        const result = this.permissions.resolve(requestId, 'allow')
+        if (result) {
+          this.socketServer.sendToSession(result.sessionPath, {
+            type: 'permission_response',
+            requestId: result.response.requestId,
+            behavior: result.response.behavior,
+          })
           await ctx.answerCallbackQuery('Permission allowed')
           await ctx.editMessageText(`✅ Allowed: ${requestId}`)
         } else {
@@ -365,16 +362,13 @@ export class TelegramFrontend {
         }
       } else if (data.startsWith('perm:deny:')) {
         const requestId = data.slice('perm:deny:'.length)
-        const sessionPath = this.permissions.getSessionPath(requestId)
-        const response = this.permissions.resolve(requestId, 'deny')
-        if (response) {
-          if (sessionPath) {
-            this.socketServer.sendToSession(sessionPath, {
-              type: 'permission_response',
-              requestId: response.requestId,
-              behavior: response.behavior,
-            })
-          }
+        const result = this.permissions.resolve(requestId, 'deny')
+        if (result) {
+          this.socketServer.sendToSession(result.sessionPath, {
+            type: 'permission_response',
+            requestId: result.response.requestId,
+            behavior: result.response.behavior,
+          })
           await ctx.answerCallbackQuery('Permission denied')
           await ctx.editMessageText(`❌ Denied: ${requestId}`)
         } else {
@@ -528,7 +522,7 @@ export class TelegramFrontend {
       }
       if (files && files.length > 0) {
         for (const filePath of files) {
-          await this.bot.api.sendDocument(userId, new URL(`file://${filePath}`))
+          await this.bot.api.sendDocument(userId, new InputFile(filePath))
         }
       }
     }

@@ -17,7 +17,10 @@ describe('WebFrontend', () => {
       permissions: null as any,
       socketServer: null as any,
       screenManager: null as any,
-      shimCommand: 'bun run src/shim.ts',
+      telegramToken: '',
+      telegramBotUsername: '',
+      telegramAllowFrom: [],
+      taskMonitor: null,
     })
     await web.start()
   })

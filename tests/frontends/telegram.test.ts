@@ -9,8 +9,8 @@ describe('telegram helpers', () => {
 
   test('formatSessionList with sessions', () => {
     const sessions = [
-      { name: 'frontend', status: 'active' as const, path: '/home/user/frontend', trust: 'ask' as const, prefix: '', uploadDir: '.', managed: false, connectedAt: Date.now() },
-      { name: 'backend', status: 'disconnected' as const, path: '/home/user/backend', trust: 'auto-approve' as const, prefix: '', uploadDir: '.', managed: true, connectedAt: null },
+      { name: 'frontend', status: 'active' as const, path: '/home/user/frontend', trust: 'ask' as const, prefix: '', uploadDir: '.', managed: false, teamIndex: 0, teamSize: 0, connectedAt: Date.now() },
+      { name: 'backend', status: 'disconnected' as const, path: '/home/user/backend', trust: 'auto-approve' as const, prefix: '', uploadDir: '.', managed: true, teamIndex: 0, teamSize: 0, connectedAt: null },
     ]
     const text = formatSessionList(sessions, 'frontend')
     expect(text).toContain('frontend')
@@ -20,7 +20,7 @@ describe('telegram helpers', () => {
 
   test('formatStatus shows dashboard', () => {
     const sessions = [
-      { name: 'frontend', status: 'active' as const, path: '/home/user/frontend', trust: 'ask' as const, prefix: 'test', uploadDir: '.', managed: false, connectedAt: Date.now() },
+      { name: 'frontend', status: 'active' as const, path: '/home/user/frontend', trust: 'ask' as const, prefix: 'test', uploadDir: '.', managed: false, teamIndex: 0, teamSize: 0, connectedAt: Date.now() },
     ]
     const text = formatStatus(sessions)
     expect(text).toContain('frontend')

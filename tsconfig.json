@@ -4,10 +4,9 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "src",
     "types": ["bun"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]

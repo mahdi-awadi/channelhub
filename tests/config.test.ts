@@ -49,6 +49,8 @@ describe('config', () => {
         prefix: '',
         uploadDir: '.',
         managed: false,
+        teamIndex: 0,
+        teamSize: 0,
       },
     }
     saveSessions(sessions, TEST_DIR)
