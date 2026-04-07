@@ -367,32 +367,26 @@ export class TelegramFrontend {
       await ctx.reply(`Renamed ${oldName} → ${newName}`)
     })
 
-    // /trust <name> [auto|ask]
     bot.command('trust', async (ctx) => {
       if (!this.isAllowed(ctx)) return
       const args = ctx.match?.trim().split(/\s+/) ?? []
-      if (!args[0]) {
-        await ctx.reply('Usage: /trust <name> [auto|ask]')
+      if (args.length < 2) {
+        await ctx.reply('Usage: /trust <session-name> <strict|ask|auto|yolo>')
         return
       }
-      const name = args[0]
-      const path = this.registry.findByName(name)
+      const [sessionName, level] = args
+      const validLevels = ['strict', 'ask', 'auto', 'yolo']
+      if (!validLevels.includes(level)) {
+        await ctx.reply(`Invalid trust level. Must be one of: ${validLevels.join(', ')}`)
+        return
+      }
+      const path = this.registry.findByName(sessionName)
       if (!path) {
-        await ctx.reply(`Session not found: ${name}`)
+        await ctx.reply(`Session "${sessionName}" not found`)
         return
       }
-      const session = this.registry.get(path)!
-      let newTrust: TrustLevel
-      if (args[1] === 'auto') {
-        newTrust = 'auto'
-      } else if (args[1] === 'ask') {
-        newTrust = 'ask'
-      } else {
-        // Toggle
-        newTrust = session.trust === 'auto' ? 'ask' : 'auto'
-      }
-      this.registry.setTrust(path, newTrust)
-      await ctx.reply(`Trust for ${name} set to ${newTrust}`)
+      this.registry.setTrust(path, level as TrustLevel)
+      await ctx.reply(`✅ Set ${sessionName} trust to <code>${level}</code>`, { parse_mode: 'HTML' })
     })
 
     // /prefix <name> <text>
