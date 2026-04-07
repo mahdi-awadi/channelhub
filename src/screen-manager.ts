@@ -13,6 +13,9 @@ const CLAUDE_TEAM_CMD = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangero
 const CONFIRM_DELAY = 1500
 const CONFIRM_RETRIES = 5
 const CONFIRM_INTERVAL = 1000
+const GRACEFUL_CANCEL_DELAY = 300      // ms between Ctrl+C and /exit
+const GRACEFUL_POLL_INTERVAL = 250     // ms between has-session polls
+const GRACEFUL_TIMEOUT = 3000          // ms total wait before hard kill
 
 export class ScreenManager {
   private managed = new Map<string, ManagedSession>()
@@ -101,6 +104,49 @@ export class ScreenManager {
     try {
       await $`tmux kill-session -t ${entry.sessionName}`.quiet()
     } catch {}
+    this.managed.delete(name)
+  }
+
+  async gracefulKill(name: string): Promise<void> {
+    const entry = this.managed.get(name)
+    if (!entry) return
+
+    // Stop respawn first so the monitor doesn't restart the session while we're tearing it down.
+    entry.respawnEnabled = false
+    const timer = this.respawnTimers.get(name)
+    if (timer) {
+      clearTimeout(timer)
+      this.respawnTimers.delete(name)
+    }
+
+    const sessionName = entry.sessionName
+
+    // 1. Cancel any in-progress tool call so Claude is at a clean prompt.
+    try { await $`tmux send-keys -t ${sessionName} C-c`.quiet() } catch {}
+    await new Promise(r => setTimeout(r, GRACEFUL_CANCEL_DELAY))
+
+    // 2. Ask Claude to exit. Since Claude is the tmux window's only process,
+    //    its exit causes tmux to close the window and the session disappears.
+    try { await $`tmux send-keys -t ${sessionName} /exit Enter`.quiet() } catch {}
+
+    // 3. Poll for the session to disappear on its own, up to GRACEFUL_TIMEOUT.
+    const deadline = Date.now() + GRACEFUL_TIMEOUT
+    while (Date.now() < deadline) {
+      if (!(await this.isSessionRunning(sessionName))) {
+        this.managed.delete(name)
+        return
+      }
+      await new Promise(r => setTimeout(r, GRACEFUL_POLL_INTERVAL))
+    }
+
+    // Final check after the poll window closes, in case the session died during the last sleep.
+    if (!(await this.isSessionRunning(sessionName))) {
+      this.managed.delete(name)
+      return
+    }
+
+    // 4. Fallback: Claude didn't respond in time, hard-kill tmux.
+    try { await $`tmux kill-session -t ${sessionName}`.quiet() } catch {}
     this.managed.delete(name)
   }
 

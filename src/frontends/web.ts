@@ -354,7 +354,7 @@ export class WebFrontend {
     try {
       const { name } = (await req.json()) as { name: string }
       if (!this.deps.screenManager) return new Response('No screen manager', { status: 503 })
-      await this.deps.screenManager.kill(name)
+      await this.deps.screenManager.gracefulKill(name)
       return Response.json({ ok: true })
     } catch (err) {
       return new Response(String(err), { status: 500 })
