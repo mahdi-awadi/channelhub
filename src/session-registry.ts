@@ -55,6 +55,8 @@ export class SessionRegistry {
       managed: overrides?.managed ?? false,
       teamIndex: overrides?.teamIndex ?? 0,
       teamSize: overrides?.teamSize ?? 0,
+      appliedProfile: overrides?.appliedProfile,
+      profileOverrides: overrides?.profileOverrides,
       status: 'active',
       connectedAt: Date.now(),
     }
@@ -140,6 +142,8 @@ export class SessionRegistry {
         managed: s.managed,
         teamIndex: s.teamIndex,
         teamSize: s.teamSize,
+        appliedProfile: s.appliedProfile,
+        profileOverrides: s.profileOverrides,
       }
     }
     return result

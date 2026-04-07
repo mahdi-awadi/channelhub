@@ -123,4 +123,26 @@ describe('SessionRegistry', () => {
     expect(registry.folderPath('/home/user/app:0')).toBe('/home/user/app')
     expect(registry.folderPath('/home/user/app')).toBe('/home/user/app')
   })
+
+  test('register accepts appliedProfile and profileOverrides', () => {
+    const registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    const session = registry.register('/home/test', {
+      appliedProfile: 'careful',
+      profileOverrides: { rules: ['custom'] },
+    })
+    expect(session.appliedProfile).toBe('careful')
+    expect(session.profileOverrides).toEqual({ rules: ['custom'] })
+  })
+
+  test('toSaveFormat persists appliedProfile and profileOverrides', () => {
+    const registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    registry.register('/home/test', {
+      appliedProfile: 'tdd',
+      profileOverrides: { facts: ['test fact'] },
+    })
+    const saved = registry.toSaveFormat()
+    const entry = saved['/home/test']
+    expect(entry.appliedProfile).toBe('tdd')
+    expect(entry.profileOverrides).toEqual({ facts: ['test fact'] })
+  })
 })
