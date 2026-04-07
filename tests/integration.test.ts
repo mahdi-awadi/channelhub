@@ -128,4 +128,53 @@ describe('integration: shim → daemon flow', () => {
 
     sock.end()
   })
+
+  test('silent tool (Read) auto-allowed without escalation', async () => {
+    const sock = connect(TEST_SOCK)
+    await new Promise<void>(r => sock.on('connect', r))
+    sock.write(JSON.stringify({ type: 'register', cwd: '/home/user/silenttest' }) + '\n')
+    await new Promise<string>(resolve => { sock.once('data', chunk => resolve(chunk.toString())) })
+
+    // Track forwarded (escalated) requests
+    const forwardedReqs: any[] = []
+    const localPermissions = new PermissionEngine(registry, (req) => forwardedReqs.push(req))
+
+    socketServer.on('permission_request', (path: string, msg: any) => {
+      const response = localPermissions.handle(path, {
+        requestId: msg.requestId,
+        toolName: msg.toolName,
+        description: msg.description,
+        inputPreview: msg.inputPreview ?? '',
+        toolArgs: msg.toolArgs ?? {},
+      })
+      if (response) {
+        socketServer.sendToSession(path, {
+          type: 'permission_response',
+          requestId: response.requestId,
+          behavior: response.behavior,
+        })
+      }
+    })
+
+    // Send permission_request for Read (silent tool)
+    sock.write(JSON.stringify({
+      type: 'permission_request',
+      requestId: 'silent1',
+      toolName: 'Read',
+      description: 'Read a file',
+      inputPreview: '{}',
+      toolArgs: {},
+    }) + '\n')
+
+    // Read response — should be auto-allowed
+    const data = await new Promise<string>(resolve => {
+      sock.once('data', chunk => resolve(chunk.toString()))
+    })
+    const msg = JSON.parse(data.trim())
+    expect(msg.type).toBe('permission_response')
+    expect(msg.behavior).toBe('allow')
+    expect(forwardedReqs.length).toBe(0) // never escalated
+
+    sock.end()
+  })
 })
