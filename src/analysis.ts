@@ -16,8 +16,8 @@ const SILENT_TOOLS = new Set([
 
 // Dangerous command patterns — conservative, high-confidence only
 const DANGEROUS_PATTERNS: RegExp[] = [
-  // rm targeting system/home paths (allow /tmp, /var/tmp)
-  /\brm\s+(-[rRf]+\s+)+(\/(?!tmp\b|var\/tmp\b)[\w-]+|~|\$HOME)/,
+  // rm targeting system/home paths or bare root (allow /tmp, /var/tmp)
+  /\brm\s+(-[rRf]+\s+)+(\/(?!tmp\b|var\/tmp\b)([\w-]+|$)|~|\$HOME)/,
   // sudo with destructive commands
   /\bsudo\s+(rm|dd|mkfs|chmod|chown|shutdown|reboot|halt|init\s+0)/,
   // Recursive world-writable
