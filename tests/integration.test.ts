@@ -98,7 +98,7 @@ describe('integration: shim → daemon flow', () => {
     sock.write(JSON.stringify({ type: 'register', cwd: '/home/user/trusted' }) + '\n')
     await new Promise<string>(resolve => { sock.once('data', chunk => resolve(chunk.toString())) })
 
-    registry.setTrust('/home/user/trusted:0', 'auto-approve')
+    registry.setTrust('/home/user/trusted:0', 'auto')
 
     socketServer.on('permission_request', (path: string, msg: any) => {
       const response = permissions.handle(path, msg)

@@ -28,7 +28,7 @@ describe('config', () => {
       webPort: 4000,
       telegramToken: '123:AAH',
       telegramAllowFrom: ['12345'],
-      defaultTrust: 'auto-approve' as const,
+      defaultTrust: 'auto' as const,
       defaultUploadDir: 'uploads/',
     }
     saveHubConfig(config, TEST_DIR)

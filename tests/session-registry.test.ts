@@ -60,8 +60,8 @@ describe('SessionRegistry', () => {
 
   test('setTrust changes trust level', () => {
     registry.register('/home/user/frontend')
-    registry.setTrust('/home/user/frontend', 'auto-approve')
-    expect(registry.get('/home/user/frontend')?.trust).toBe('auto-approve')
+    registry.setTrust('/home/user/frontend', 'auto')
+    expect(registry.get('/home/user/frontend')?.trust).toBe('auto')
   })
 
   test('setPrefix changes prefix', () => {
@@ -74,7 +74,7 @@ describe('SessionRegistry', () => {
     const saved = {
       '/home/user/frontend': {
         name: 'frontend',
-        trust: 'auto-approve' as const,
+        trust: 'auto' as const,
         prefix: 'test',
         uploadDir: '.',
         managed: true,
@@ -86,7 +86,7 @@ describe('SessionRegistry', () => {
     const s = registry.get('/home/user/frontend')
     expect(s?.name).toBe('frontend')
     expect(s?.status).toBe('disconnected')
-    expect(s?.trust).toBe('auto-approve')
+    expect(s?.trust).toBe('auto')
   })
 
   test('register allows multiple sessions from same folder with different indices', () => {

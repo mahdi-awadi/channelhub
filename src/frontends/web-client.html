@@ -563,8 +563,8 @@
       const tmuxCmd = document.getElementById('tmux-cmd')
       if (session) {
         badge.style.display = ''
-        badge.textContent = session.trust === 'auto-approve' ? 'auto-approve' : 'ask'
-        badge.className = 'trust-badge' + (session.trust === 'auto-approve' ? ' auto' : '')
+        badge.textContent = session.trust === 'auto' ? 'auto' : session.trust
+        badge.className = 'trust-badge' + (session.trust === 'auto' ? ' auto' : '')
         tmuxCmd.style.display = ''
         tmuxCmd.textContent = `tmux attach -t hub-${name}`
       } else {

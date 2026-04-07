@@ -9,7 +9,7 @@ import type { MessageRouter } from '../message-router'
 import type { PermissionEngine } from '../permission-engine'
 import type { SocketServer } from '../socket-server'
 import type { ScreenManager } from '../screen-manager'
-import type { PermissionRequest } from '../types'
+import type { PermissionRequest, TrustLevel } from '../types'
 import type { TaskMonitor } from '../task-monitor'
 
 type WebFrontendDeps = {
@@ -372,7 +372,7 @@ export class WebFrontend {
       const { name, level } = (await req.json()) as { name: string; level: string }
       const path = this.deps.registry.findByName(name)
       if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
-      this.deps.registry.setTrust(path, level as 'ask' | 'auto-approve')
+      this.deps.registry.setTrust(path, level as TrustLevel)
       return Response.json({ ok: true })
     } catch (err) {
       return new Response(String(err), { status: 500 })

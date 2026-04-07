@@ -10,7 +10,7 @@ describe('telegram helpers', () => {
   test('formatSessionList with sessions', () => {
     const sessions = [
       { name: 'frontend', status: 'active' as const, path: '/home/user/frontend', trust: 'ask' as const, prefix: '', uploadDir: '.', managed: false, teamIndex: 0, teamSize: 0, connectedAt: Date.now() },
-      { name: 'backend', status: 'disconnected' as const, path: '/home/user/backend', trust: 'auto-approve' as const, prefix: '', uploadDir: '.', managed: true, teamIndex: 0, teamSize: 0, connectedAt: null },
+      { name: 'backend', status: 'disconnected' as const, path: '/home/user/backend', trust: 'auto' as const, prefix: '', uploadDir: '.', managed: true, teamIndex: 0, teamSize: 0, connectedAt: null },
     ]
     const text = formatSessionList(sessions, 'frontend')
     expect(text).toContain('frontend')

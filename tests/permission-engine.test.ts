@@ -18,7 +18,7 @@ describe('PermissionEngine', () => {
 
   test('auto-approve returns allow immediately', () => {
     registry.register('/home/user/trusted')
-    registry.setTrust('/home/user/trusted', 'auto-approve')
+    registry.setTrust('/home/user/trusted', 'auto')
     const result = engine.handle('/home/user/trusted', {
       requestId: 'abcde',
       toolName: 'Bash',

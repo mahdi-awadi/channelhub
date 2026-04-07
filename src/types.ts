@@ -1,8 +1,13 @@
 // src/types.ts
 
-export type TrustLevel = 'ask' | 'auto-approve'
+export type TrustLevel = 'strict' | 'ask' | 'auto' | 'yolo'
+
+// Legacy value kept for migration — never written anywhere new
+export type LegacyTrustLevel = 'ask' | 'auto-approve'
 
 export type SessionStatus = 'active' | 'disconnected' | 'respawning'
+
+export type FrontendSource = 'telegram' | 'web' | 'cli'
 
 export type SessionConfig = {
   name: string
@@ -27,8 +32,6 @@ export type HubConfig = {
   defaultTrust: TrustLevel
   defaultUploadDir: string
 }
-
-export type FrontendSource = 'telegram' | 'web' | 'cli'
 
 export type InboundMessage = {
   sessionName: string
@@ -70,3 +73,11 @@ export type DaemonToShim =
   | { type: 'channel_message'; content: string; meta: Record<string, string> }
   | { type: 'tool_result'; name: string; result: unknown; isError?: boolean }
   | { type: 'permission_response'; requestId: string; behavior: 'allow' | 'deny' }
+
+export function migrateTrustLevel(value: string): TrustLevel {
+  if (value === 'auto-approve') return 'auto'
+  if (value === 'strict' || value === 'ask' || value === 'auto' || value === 'yolo') {
+    return value
+  }
+  return 'ask' // default fallback
+}

@@ -27,7 +27,7 @@ Commands:
   spawn <name> <path>          Spawn a new session
   kill <name>                  Kill a session
   send <name> <message>        Send a message to a session
-  trust <name> <level>         Set trust level (ask|auto-approve)
+  trust <name> <level>         Set trust level (ask|auto|strict|yolo)
   prefix <name> <text>         Set a prefix for a session
   rename <oldName> <newName>   Rename a session
   upload <name> <file>         Upload a file to a session
@@ -62,7 +62,7 @@ async function main() {
       }
       for (const s of sessions) {
         const icon = s.status === 'active' ? '●' : s.status === 'respawning' ? '◑' : '○'
-        const trust = s.trust === 'auto-approve' ? ' [auto]' : ''
+        const trust = s.trust === 'auto' ? ' [auto]' : ''
         if (command === 'status') {
           console.log(`${icon} ${s.name}${trust} (${s.status})`)
           console.log(`  path: ${s.path}`)

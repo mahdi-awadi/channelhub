@@ -31,7 +31,7 @@ export class PermissionEngine {
     const session = this.registry.get(sessionPath)
     if (!session) return null
 
-    if (session.trust === 'auto-approve') {
+    if (session.trust === 'auto') {
       return { requestId: input.requestId, behavior: 'allow' }
     }
 

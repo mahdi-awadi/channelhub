@@ -1,6 +1,6 @@
 // src/frontends/telegram.ts
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
-import type { SessionState, PermissionRequest } from '../types'
+import type { SessionState, PermissionRequest, TrustLevel } from '../types'
 import type { SessionRegistry } from '../session-registry'
 import type { MessageRouter } from '../message-router'
 import type { PermissionEngine } from '../permission-engine'
@@ -22,7 +22,7 @@ export function formatSessionList(sessions: SessionState[], activeSession: strin
         : s.status === 'respawning'
           ? '🟡'
           : '🔴'
-    const trustLabel = s.trust === 'auto-approve' ? ' [auto]' : ''
+    const trustLabel = s.trust === 'auto' ? ' [auto]' : ''
     const activeMarker = s.name === activeSession ? ' ← active' : ''
     return `${icon} ${s.name}${trustLabel}${activeMarker}`
   })
@@ -287,14 +287,14 @@ export class TelegramFrontend {
         return
       }
       const session = this.registry.get(path)!
-      let newTrust: 'auto-approve' | 'ask'
+      let newTrust: TrustLevel
       if (args[1] === 'auto') {
-        newTrust = 'auto-approve'
+        newTrust = 'auto'
       } else if (args[1] === 'ask') {
         newTrust = 'ask'
       } else {
         // Toggle
-        newTrust = session.trust === 'auto-approve' ? 'ask' : 'auto-approve'
+        newTrust = session.trust === 'auto' ? 'ask' : 'auto'
       }
       this.registry.setTrust(path, newTrust)
       await ctx.reply(`Trust for ${name} set to ${newTrust}`)
