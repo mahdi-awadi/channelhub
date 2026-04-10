@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
-import { loadProfiles, saveProfiles, getProfile, BUILTIN_PROFILES, applyProfile, resolveSession } from '../src/profiles'
+import { loadProfiles, saveProfiles, getProfile, BUILTIN_PROFILES, applyProfile, resolveSession, injectContext } from '../src/profiles'
 import type { Profile } from '../src/types'
 
 const TEST_DIR = join(import.meta.dir, '.test-profiles')
@@ -145,5 +145,57 @@ describe('profiles', () => {
     const session = { appliedProfile: 'with-facts' }
     const effective = resolveSession(session, profiles)
     expect(effective.facts).toEqual(['fact one', 'fact two'])
+  })
+
+  describe('injectContext', () => {
+    test('prepends channel instructions for telegram', () => {
+      const effective = resolveSession({}, [])
+      effective.rules = []
+      effective.facts = []
+      const result = injectContext('fix the bug', 'telegram', effective)
+      expect(result).toContain('[Channel:')
+      expect(result).toContain('Telegram')
+      expect(result).toContain('fix the bug')
+    })
+
+    test('includes rules when present', () => {
+      const effective = resolveSession(
+        { profileOverrides: { rules: ['no shortcuts', 'TDD always'], facts: [] } },
+        [],
+      )
+      const result = injectContext('hello', 'web', effective)
+      expect(result).toContain('[Session Rules:')
+      expect(result).toContain('no shortcuts')
+      expect(result).toContain('TDD always')
+    })
+
+    test('includes facts when present', () => {
+      const effective = resolveSession(
+        { profileOverrides: { rules: [], facts: ['DB is dev', 'Bob owns auth'] } },
+        [],
+      )
+      const result = injectContext('hello', 'web', effective)
+      expect(result).toContain('[Facts:')
+      expect(result).toContain('DB is dev')
+      expect(result).toContain('Bob owns auth')
+    })
+
+    test('skips empty rules/facts blocks', () => {
+      const effective = resolveSession({}, [])
+      const result = injectContext('hello', 'cli', effective)
+      expect(result).not.toContain('[Session Rules:')
+      expect(result).not.toContain('[Facts:')
+      expect(result).toContain('hello')
+    })
+
+    test('uses profile override for channel instructions', () => {
+      const effective = resolveSession(
+        { profileOverrides: { channelOverrides: { telegram: 'Custom telegram instructions' } } },
+        [],
+      )
+      const result = injectContext('hello', 'telegram', effective)
+      expect(result).toContain('Custom telegram instructions')
+      expect(result).not.toContain('You are replying on Telegram mobile')
+    })
   })
 })

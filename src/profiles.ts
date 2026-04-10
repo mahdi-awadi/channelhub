@@ -5,6 +5,12 @@ import type { Profile, ProfileOverrides, TrustLevel, FrontendSource } from './ty
 
 const PROFILES_FILE = 'profiles.json'
 
+export const DEFAULT_CHANNEL_INSTRUCTIONS: Record<FrontendSource, string> = {
+  telegram: 'You are replying on Telegram mobile. Use markdown formatting, emoji prefixes (✅ ❌ ⚠️ 🔄 📝), bold for emphasis, and fenced code blocks. When you create, save, or reference a file (especially .md specs, configs, or new code files), paste the full file contents in your reply — mobile users cannot browse the filesystem. Keep replies concise but complete.',
+  web: 'You are replying on the web dashboard. Use markdown, code blocks, tables, and emoji. For files, show a summary or diff; long content is fine since the dashboard has scroll. Prefer structured output over walls of text.',
+  cli: 'You are replying via the CLI. Plain text only, no markdown, no emoji. Keep output terminal-friendly and concise.',
+}
+
 export const BUILTIN_PROFILES: readonly Profile[] = [
   {
     name: 'careful',
@@ -130,6 +136,32 @@ export function applyProfile(profile: Profile): {
     appliedProfile: profile.name,
     profileOverrides: {},
   }
+}
+
+export function injectContext(
+  userMessage: string,
+  frontend: FrontendSource,
+  effective: EffectiveConfig,
+): string {
+  const parts: string[] = []
+
+  const channelInstr = effective.channelOverrides?.[frontend] ?? DEFAULT_CHANNEL_INSTRUCTIONS[frontend]
+  if (channelInstr) {
+    parts.push(`[Channel: ${channelInstr}]`)
+  }
+
+  if (effective.rules.length > 0) {
+    parts.push(`[Session Rules: ${effective.rules.join('; ')}]`)
+  }
+
+  if (effective.facts.length > 0) {
+    parts.push(`[Facts: ${effective.facts.join('; ')}]`)
+  }
+
+  parts.push('')
+  parts.push(userMessage)
+
+  return parts.join('\n')
 }
 
 export function resolveSession(
