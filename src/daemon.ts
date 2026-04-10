@@ -9,8 +9,8 @@ import { ScreenManager } from './screen-manager'
 import { TaskMonitor } from './task-monitor'
 import { TelegramFrontend } from './frontends/telegram'
 import { WebFrontend } from './frontends/web'
-import type { PermissionRequest, Profile } from './types'
-import { getProfile } from './profiles'
+import type { PermissionRequest, Profile, FrontendSource } from './types'
+import { getProfile, resolveSession, injectContext } from './profiles'
 
 const config = loadHubConfig()
 const savedSessions = loadSessions()
@@ -72,9 +72,21 @@ socketServer.onLookupProfile = (folder: string) => {
 const router = new MessageRouter(
   registry,
   (path, content, meta) => {
+    // Resolve effective session config and inject channel instructions,
+    // rules, and facts based on the frontend that sent this message.
+    const session = registry.get(path)
+    let enrichedContent = content
+    if (session) {
+      const effective = resolveSession(
+        { appliedProfile: session.appliedProfile, profileOverrides: session.profileOverrides },
+        profiles,
+      )
+      const frontend = (meta.frontend ?? 'web') as FrontendSource
+      enrichedContent = injectContext(content, frontend, effective)
+    }
     return socketServer.sendToSession(path, {
       type: 'channel_message',
-      content,
+      content: enrichedContent,
       meta,
     })
   },
