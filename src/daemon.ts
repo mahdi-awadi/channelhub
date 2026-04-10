@@ -63,9 +63,9 @@ const socketServer = new SocketServer(registry, SOCKET_PATH)
 
 socketServer.onLookupProfile = (folder: string) => {
   const entry = screenManager.getManagedByPath(folder)
-  if (!entry?.profileName) return undefined
-  const profile = getProfile(entry.profileName, profiles)
-  return profile ? { profile } : undefined
+  if (!entry) return { managed: false }
+  const profile = entry.profileName ? getProfile(entry.profileName, profiles) : undefined
+  return { managed: true, profile }
 }
 
 // Message router
@@ -152,13 +152,16 @@ async function start(): Promise<void> {
   await socketServer.start()
   process.stderr.write(`hub: socket server listening on ${SOCKET_PATH}\n`)
 
-  let telegramBotUsername = ''
-  if (config.telegramToken) {
+  let telegramBotUsername = config.telegramBotUsername ?? ''
+  if (!telegramBotUsername && config.telegramToken) {
     try {
       const res = await fetch(`https://api.telegram.org/bot${config.telegramToken}/getMe`)
       const data = await res.json() as any
       if (data.ok) telegramBotUsername = data.result.username
     } catch {}
+  }
+  if (telegramBotUsername) {
+    process.stderr.write(`hub: telegram login widget bot = @${telegramBotUsername}\n`)
   }
 
   webFrontend = new WebFrontend({

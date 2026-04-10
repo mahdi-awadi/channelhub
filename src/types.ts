@@ -55,6 +55,7 @@ export type SessionState = SessionConfig & {
 export type HubConfig = {
   webPort: number
   telegramToken: string
+  telegramBotUsername?: string
   telegramAllowFrom: string[]
   defaultTrust: TrustLevel
   defaultUploadDir: string

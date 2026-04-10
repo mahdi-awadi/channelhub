@@ -43,6 +43,7 @@ export function loadHubConfig(dir: string = HUB_DIR): HubConfig {
   return {
     webPort: raw.webPort ?? 3000,
     telegramToken: raw.telegramToken ?? '',
+    telegramBotUsername: raw.telegramBotUsername,
     telegramAllowFrom: raw.telegramAllowFrom ?? [],
     defaultTrust: raw.defaultTrust ?? 'ask',
     defaultUploadDir: raw.defaultUploadDir ?? '.',

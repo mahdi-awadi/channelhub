@@ -1,5 +1,18 @@
 // src/screen-manager.ts — uses tmux for reliable TUI interaction
 import { $ } from 'bun'
+import { mkdirSync, existsSync } from 'fs'
+
+function ensureProjectDir(projectPath: string): void {
+  // Reject paths whose basename collides with session-key suffix format (path:index).
+  // Otherwise spawning at "/foo:0" creates a real dir that ghosts the registry grouping.
+  if (/:\d+$/.test(projectPath)) {
+    throw new Error(`Invalid project path "${projectPath}": trailing ":N" collides with session key format`)
+  }
+  if (!existsSync(projectPath)) {
+    mkdirSync(projectPath, { recursive: true })
+    process.stderr.write(`hub: created project directory ${projectPath}\n`)
+  }
+}
 
 type ManagedSession = {
   sessionName: string
@@ -23,6 +36,7 @@ export class ScreenManager {
 
   async spawn(name: string, projectPath: string, instructions?: string, profileName?: string): Promise<void> {
     const sessionName = `hub-${name}`
+    ensureProjectDir(projectPath)
 
     // Kill existing session if any
     try { await $`tmux kill-session -t ${sessionName}`.quiet() } catch {}
@@ -191,6 +205,7 @@ export class ScreenManager {
   }
 
   async spawnTeam(name: string, projectPath: string, size: number, instructions?: string, profileName?: string): Promise<void> {
+    ensureProjectDir(projectPath)
     const teammateNames = Array.from({ length: size - 1 }, (_, i) => `${name}-${i + 2}`)
     const tagsSuffix = instructions ? ` ${instructions}` : ''
     const leadPrompt = `You are the team lead "${name}". Create a team and spawn ${size - 1} teammates. Assign them names: ${teammateNames.join(', ')}. Wait for them to connect, then coordinate the work.${tagsSuffix}`

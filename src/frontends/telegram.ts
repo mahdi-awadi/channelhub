@@ -276,12 +276,15 @@ export class TelegramFrontend {
       }
 
       try {
+        const userId = this.getUserId(ctx)
         if (teamSize > 1) {
           await this.screenManager.spawnTeam(name, projectPath, teamSize, undefined, profileName)
-          await ctx.reply(`Spawned team ${name} (${teamSize} agents) at ${projectPath}${profileName ? ` with profile ${profileName}` : ''}`)
+          this.userActiveSessions.set(userId, name)
+          await ctx.reply(`Spawned team ${name} (${teamSize} agents) at ${projectPath}${profileName ? ` with profile ${profileName}` : ''} — now active`)
         } else {
           await this.screenManager.spawn(name, projectPath, undefined, profileName)
-          await ctx.reply(`Spawned ${name} at ${projectPath}${profileName ? ` with profile ${profileName}` : ''}`)
+          this.userActiveSessions.set(userId, name)
+          await ctx.reply(`Spawned ${name} at ${projectPath}${profileName ? ` with profile ${profileName}` : ''} — now active`)
         }
       } catch (err) {
         await ctx.reply(`Failed to spawn: ${err}`)
@@ -344,7 +347,11 @@ export class TelegramFrontend {
         await ctx.reply(`Session not found: ${name}`)
         return
       }
-      await this.screenManager.gracefulKill(name)
+      if (this.screenManager.isManaged(name)) {
+        await this.screenManager.gracefulKill(name)
+      } else {
+        this.socketServer.disconnectSession(path)
+      }
       this.registry.unregister(path)
       await ctx.reply(`Killed session ${name}`)
     })
@@ -640,6 +647,38 @@ export class TelegramFrontend {
   }
 
   async start(): Promise<void> {
+    // Register the command menu so Telegram shows autocomplete in the chat input.
+    const commands = [
+      { command: 'list',     description: 'Show all sessions' },
+      { command: 'status',   description: 'Dashboard with details' },
+      { command: 'spawn',    description: 'Spawn a new session: <name> <path> [--profile <n>] [team-size]' },
+      { command: 'kill',     description: 'Gracefully end a session: <name>' },
+      { command: 'team',     description: 'Show team or add teammate: <name> [add]' },
+      { command: 'trust',    description: 'Set trust: <name> strict|ask|auto|yolo' },
+      { command: 'prefix',   description: 'Set message prefix: <name> <text>' },
+      { command: 'rename',   description: 'Rename a session: <old> <new>' },
+      { command: 'all',      description: 'Broadcast to all sessions: <message>' },
+      { command: 'profiles', description: 'List available profiles' },
+      { command: 'profile',  description: 'Show/create/delete a profile' },
+    ]
+    try {
+      // Wipe any stale commands across every scope, then set fresh.
+      // Telegram clients cache per-scope; clearing then re-pushing forces a refresh.
+      for (const scope of [
+        { type: 'default' as const },
+        { type: 'all_private_chats' as const },
+        { type: 'all_group_chats' as const },
+      ]) {
+        try { await this.bot.api.deleteMyCommands({ scope }) } catch {}
+      }
+      await this.bot.api.setMyCommands(commands, { scope: { type: 'default' } })
+      await this.bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
+      await this.bot.api.setChatMenuButton({ menu_button: { type: 'commands' } })
+      process.stderr.write(`hub telegram: registered ${commands.length} commands (default + all_private_chats)\n`)
+    } catch (err) {
+      process.stderr.write(`hub telegram: setMyCommands failed: ${err}\n`)
+    }
+
     // Retry with backoff on 409 Conflict (another bot instance polling)
     for (let attempt = 1; ; attempt++) {
       try {

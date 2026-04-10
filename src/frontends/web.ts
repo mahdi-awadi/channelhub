@@ -70,7 +70,10 @@ export class WebFrontend {
         // Serve HTML
         if (url.pathname === '/' || url.pathname === '/index.html') {
           return new Response(html, {
-            headers: { 'Content-Type': 'text/html' },
+            headers: {
+              'Content-Type': 'text/html',
+              'Cache-Control': 'no-store, must-revalidate',
+            },
           })
         }
 
@@ -353,8 +356,16 @@ export class WebFrontend {
   private async handleKill(req: Request): Promise<Response> {
     try {
       const { name } = (await req.json()) as { name: string }
-      if (!this.deps.screenManager) return new Response('No screen manager', { status: 503 })
-      await this.deps.screenManager.gracefulKill(name)
+      if (this.deps.screenManager?.isManaged(name)) {
+        await this.deps.screenManager.gracefulKill(name)
+      } else {
+        // Unmanaged session (Claude started outside hub) — disconnect socket and drop from registry.
+        const path = this.deps.registry.findByName(name)
+        if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
+        this.deps.socketServer?.disconnectSession(path)
+        this.deps.registry.unregister(path)
+      }
+      this.refreshSessions()
       return Response.json({ ok: true })
     } catch (err) {
       return new Response(String(err), { status: 500 })

@@ -513,10 +513,10 @@
             item.appendChild(restartBtn)
           }
 
-          if (s.managed && s.status !== 'disconnected') {
+          if (s.status !== 'disconnected') {
             const closeBtn = document.createElement('button')
             closeBtn.textContent = '✕'
-            closeBtn.title = 'Close session'
+            closeBtn.title = s.managed ? 'Close session' : 'Remove from list (Claude keeps running)'
             closeBtn.style.cssText = 'background:none;border:1px solid #c96;color:#c96;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;margin-left:auto;'
             closeBtn.onclick = (e) => { e.stopPropagation(); closeSession(s.name) }
             item.appendChild(closeBtn)
@@ -726,10 +726,12 @@
     // Restart disconnected session
     async function restartSession(name, path) {
       try {
+        // Strip :N session-key suffix to get the actual folder path.
+        const folder = path ? path.replace(/:\d+$/, '') : ''
         const res = await fetch('/api/spawn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, path })
+          body: JSON.stringify({ name, path: folder })
         })
         if (!res.ok) throw new Error(await res.text())
       } catch (err) {

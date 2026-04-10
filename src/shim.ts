@@ -48,18 +48,51 @@ function isAgentTeammate(): boolean {
   }
 }
 
+function getHubTmuxSession(): string | null {
+  // Only register with the hub if we're running inside a tmux pane whose
+  // session name begins with "hub-". Anything else (GNU screen, bare terminal,
+  // a separate tmux server, nested sessions) is ignored.
+  const pane = process.env.TMUX_PANE
+  if (!pane) return null
+  try {
+    const { execSync } = require('child_process')
+    const sessionName = execSync(`tmux display-message -p -t ${pane} '#S'`, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString().trim()
+    return sessionName.startsWith('hub-') ? sessionName : null
+  } catch {
+    return null
+  }
+}
+
+function startStubMcpServer(): void {
+  // Keeps Claude happy (the MCP server it configured exists) but does not
+  // connect to the daemon — so this Claude instance is invisible to the hub.
+  const mcp = new Server(
+    { name: 'channelhub', version: '0.1.0' },
+    { capabilities: { tools: {}, experimental: { 'claude/channel': {} } } },
+  )
+  mcp.connect(new StdioServerTransport()).catch(() => {})
+}
+
 function main() {
-  // Don't register with hub if this is an agent team teammate spawned by Claude internally
+  // Skip registration for agent teammates spawned by Claude's agent teams feature.
   if (isAgentTeammate()) {
     process.stderr.write('hub shim: agent teammate detected, skipping hub registration\n')
-    // Still start MCP server so Claude doesn't error, but don't connect to daemon
-    const mcp = new Server(
-      { name: 'channelhub', version: '0.1.0' },
-      { capabilities: { tools: {}, experimental: { 'claude/channel': {} } } },
-    )
-    mcp.connect(new StdioServerTransport()).catch(() => {})
+    startStubMcpServer()
     return
   }
+
+  // Skip registration unless we're inside a hub-managed tmux session.
+  // This prevents stray Claude instances (from other terminals, screen, etc.)
+  // from joining the hub and appearing as phantom teammates.
+  const hubSession = getHubTmuxSession()
+  if (!hubSession) {
+    process.stderr.write('hub shim: not inside a hub-* tmux session, skipping registration\n')
+    startStubMcpServer()
+    return
+  }
+  process.stderr.write(`hub shim: running inside tmux session "${hubSession}"\n`)
 
   const cwd = process.cwd()
   const daemon = connect(SOCKET_PATH)
@@ -197,14 +230,19 @@ function main() {
         process.stderr.write(`hub shim: rejected — ${msg.reason}\n`)
         process.exit(1)
         break
-      case 'channel_message':
+      case 'channel_message': {
+        // Append a directive so Claude reliably calls the reply tool instead of
+        // treating the message like an inline user prompt. The instructions field
+        // on the MCP server is only seen once at init; this nudge is per-message.
+        const annotated = `${msg.content}\n\n[hub] You must respond using the channelhub reply tool — do NOT just type your answer. Plain text in this terminal is not visible to the user; only the reply tool routes back to the frontend.`
         mcp.notification({
           method: 'notifications/claude/channel',
-          params: { content: msg.content, meta: msg.meta },
+          params: { content: annotated, meta: msg.meta },
         }).catch((err) => {
           process.stderr.write(`hub shim: failed to deliver message: ${err}\n`)
         })
         break
+      }
       case 'permission_response':
         mcp.notification({
           method: 'notifications/claude/channel/permission',

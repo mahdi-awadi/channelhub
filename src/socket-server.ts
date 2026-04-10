@@ -10,7 +10,7 @@ export class SocketServer extends EventEmitter {
   private registry: SessionRegistry
   private socketPath: string
   private connections = new Map<string, Socket>()
-  onLookupProfile?: (folder: string) => { profile: Profile } | undefined
+  onLookupProfile?: (folder: string) => { managed: boolean; profile?: Profile } | undefined
 
   constructor(registry: SessionRegistry, socketPath: string) {
     super()
@@ -99,6 +99,7 @@ export class SocketServer extends EventEmitter {
             prefix: profileInfo?.profile?.prefix ?? undefined,
             appliedProfile: profileInfo?.profile?.name,
             profileOverrides: {},
+            managed: profileInfo?.managed ?? false,
           })
         }
 
@@ -128,6 +129,12 @@ export class SocketServer extends EventEmitter {
 
   send(socket: Socket, msg: DaemonToShim): void {
     socket.write(JSON.stringify(msg) + '\n')
+  }
+
+  disconnectSession(path: string): void {
+    const socket = this.connections.get(path)
+    if (socket && !socket.destroyed) socket.end()
+    this.connections.delete(path)
   }
 
   sendToSession(path: string, msg: DaemonToShim): boolean {
