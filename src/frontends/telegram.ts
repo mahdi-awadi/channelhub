@@ -457,6 +457,31 @@ export class TelegramFrontend {
       await ctx.reply(`✅ Added fact to ${sessionName}: "${factText}"`)
     })
 
+    // /channel <session> <reset|instruction text>
+    bot.command('channel', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const args = ctx.match?.trim() ?? ''
+      const parts = args.length > 0 ? args.split(/\s+/) : []
+      if (parts.length < 2) {
+        await ctx.reply('Usage: /channel <session> <reset|instruction text>')
+        return
+      }
+      const sessionName = parts[0]
+      const path = this.registry.findByName(sessionName)
+      if (!path) {
+        await ctx.reply(`Session "${sessionName}" not found`)
+        return
+      }
+      if (parts[1] === 'reset') {
+        this.registry.clearChannelOverride(path, 'telegram')
+        await ctx.reply(`✅ Reset channel instructions for ${sessionName} (using default)`)
+        return
+      }
+      const text = parts.slice(1).join(' ')
+      this.registry.setChannelOverride(path, 'telegram', text)
+      await ctx.reply(`✅ Channel instructions for ${sessionName} updated`)
+    })
+
     // /facts <session> [clear]
     bot.command('facts', async (ctx) => {
       if (!this.isAllowed(ctx)) return

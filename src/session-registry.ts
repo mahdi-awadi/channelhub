@@ -1,6 +1,6 @@
 // src/session-registry.ts
 import { basename } from 'path'
-import type { SessionState, SessionConfig, TrustLevel, Profile } from './types'
+import type { SessionState, SessionConfig, TrustLevel, Profile, FrontendSource } from './types'
 
 type RegistryOptions = {
   defaultTrust: TrustLevel
@@ -176,6 +176,20 @@ export class SessionRegistry {
     if (!s) return
     if (!s.profileOverrides) s.profileOverrides = {}
     s.profileOverrides.facts = []
+  }
+
+  setChannelOverride(path: string, frontend: FrontendSource, text: string): void {
+    const s = this.sessions.get(path)
+    if (!s) return
+    if (!s.profileOverrides) s.profileOverrides = {}
+    if (!s.profileOverrides.channelOverrides) s.profileOverrides.channelOverrides = {}
+    s.profileOverrides.channelOverrides[frontend] = text
+  }
+
+  clearChannelOverride(path: string, frontend: FrontendSource): void {
+    const s = this.sessions.get(path)
+    if (!s?.profileOverrides?.channelOverrides) return
+    delete s.profileOverrides.channelOverrides[frontend]
   }
 
   restoreFrom(saved: Record<string, SessionConfig>): void {

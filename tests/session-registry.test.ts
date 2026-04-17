@@ -213,4 +213,37 @@ describe('SessionRegistry', () => {
       expect(registry.getEffectiveRules('/nope', [profile])).toEqual([])
     })
   })
+
+  describe('channel overrides', () => {
+    test('setChannelOverride stores text under the frontend key', () => {
+      registry.register('/home/test')
+      registry.setChannelOverride('/home/test', 'telegram', 'be terse')
+      const s = registry.get('/home/test')
+      expect(s?.profileOverrides?.channelOverrides?.telegram).toBe('be terse')
+    })
+
+    test('setChannelOverride preserves other frontends', () => {
+      registry.register('/home/test')
+      registry.setChannelOverride('/home/test', 'telegram', 'terse')
+      registry.setChannelOverride('/home/test', 'web', 'verbose')
+      const overrides = registry.get('/home/test')?.profileOverrides?.channelOverrides
+      expect(overrides?.telegram).toBe('terse')
+      expect(overrides?.web).toBe('verbose')
+    })
+
+    test('clearChannelOverride removes only the targeted frontend', () => {
+      registry.register('/home/test')
+      registry.setChannelOverride('/home/test', 'telegram', 'a')
+      registry.setChannelOverride('/home/test', 'web', 'b')
+      registry.clearChannelOverride('/home/test', 'telegram')
+      const overrides = registry.get('/home/test')?.profileOverrides?.channelOverrides
+      expect(overrides?.telegram).toBeUndefined()
+      expect(overrides?.web).toBe('b')
+    })
+
+    test('channel methods no-op on unknown path', () => {
+      expect(() => registry.setChannelOverride('/nope', 'telegram', 'x')).not.toThrow()
+      expect(() => registry.clearChannelOverride('/nope', 'telegram')).not.toThrow()
+    })
+  })
 })
