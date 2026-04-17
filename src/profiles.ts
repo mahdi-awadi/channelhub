@@ -26,6 +26,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
     prefix: '',
     driftDetection: true,
     sidecarEnabled: false,
+    verification: { commands: ['bun test', 'bunx tsc --noEmit'] },
   },
   {
     name: 'tdd',
@@ -41,6 +42,7 @@ export const BUILTIN_PROFILES: readonly Profile[] = [
     prefix: '',
     driftDetection: true,
     sidecarEnabled: false,
+    verification: { commands: ['bun test', 'bunx tsc --noEmit'] },
   },
   {
     name: 'docs',
