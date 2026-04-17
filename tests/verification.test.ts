@@ -239,4 +239,38 @@ describe('VerificationRunner.run', () => {
     await first
     expect(runner.isRunning(dir)).toBe(false)
   })
+
+  test('probe fallback fires when profile commands are empty', async () => {
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'echo ok' } }),
+    )
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const called: string[] = []
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({ verification: { commands: [] } }),
+      probe: (p) => {
+        called.push(p)
+        return ['echo probed']
+      },
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('pass')
+    expect(called).toEqual([dir])
+  })
+
+  test('no commands + empty probe → error(no-commands)', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({ verification: { commands: [] } }),
+      probe: () => [],
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('error')
+    if (result.status === 'error') {
+      expect(result.reason).toBe('no-commands')
+    }
+  })
 })
