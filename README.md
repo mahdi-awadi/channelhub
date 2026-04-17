@@ -95,7 +95,7 @@ channelhub attach             # View daemon logs (Ctrl+B then D to detach)
 In any project folder:
 
 ```bash
-claude --channels plugin:channelhub@claude-plugins-official
+claude --dangerously-load-development-channels server:hub
 ```
 
 Your session appears in the dashboard at `http://localhost:3000` immediately.
@@ -245,13 +245,9 @@ bun run src/cli.ts    # CLI tool
 
 ## Plugin Status
 
-ChannelHub is published on the official Claude Code plugin marketplace. Install it with:
+> **ChannelHub is not yet on the approved marketplace.** During the research preview, custom channels must use `--dangerously-load-development-channels server:hub` to run. This flag bypasses the allowlist check for your specific server entry. Permission relay and all other channel features work normally.
 
-```
-/plugin install channelhub@claude-plugins-official
-```
-
-Then connect any project with `claude --channels plugin:channelhub@claude-plugins-official`.
+The project is structured as a Claude Code channel plugin and ready to submit to the [official marketplace](https://platform.claude.com/plugins/submit). Once approved, users will be able to install it with `/plugin install channelhub@marketplace` and use `--channels plugin:channelhub@marketplace` without the development flag.
 
 ## License
 
