@@ -1,5 +1,6 @@
 // src/daemon.ts
 import { join } from 'path'
+import { readFileSync, statSync } from 'fs'
 import { loadHubConfig, loadSessions, saveSessions, loadProfilesForHub, saveProfilesForHub, HUB_DIR } from './config'
 import { SessionRegistry } from './session-registry'
 import { SocketServer } from './socket-server'
@@ -15,6 +16,41 @@ import { detectDrift } from './analysis'
 
 const DRIFT_RATE_LIMIT_MS = 2 * 60 * 1000 // 2 minutes between alerts per session
 const lastDriftNotif = new Map<string, number>()
+
+// Auto-fetch file contents when Claude emits a bare save/write path in a reply.
+const FILE_PATH_PATTERNS: RegExp[] = [
+  /saved to:?\s+([`'"]?)([\/~][\w\/.\-]+\.(md|json|yaml|yml|ts|tsx|js|jsx|py|go|rs|txt|toml))\1/i,
+  /written to:?\s+([`'"]?)([\/~][\w\/.\-]+\.(md|json|yaml|yml|ts|tsx|js|jsx|py|go|rs|txt|toml))\1/i,
+  /spec saved:?\s+([`'"]?)([\/~][\w\/.\-]+\.(md|json|yaml|yml|ts|tsx|js|jsx|py|go|rs|txt|toml))\1/i,
+]
+const MAX_AUTOFETCH_SIZE = 50 * 1024 // 50KB cap
+const AUTOFETCH_DEDUP_MS = 10_000
+const lastAutoFetch = new Map<string, number>()
+
+function tryAutoFetchPath(reply: string): string | null {
+  for (const pattern of FILE_PATH_PATTERNS) {
+    const match = pattern.exec(reply)
+    if (match) {
+      let path = match[2] ?? ''
+      if (path.startsWith('~')) {
+        path = path.replace('~', process.env.HOME ?? '')
+      }
+      return path
+    }
+  }
+  return null
+}
+
+function readFileSafely(filePath: string): string | null {
+  try {
+    const stat = statSync(filePath)
+    if (!stat.isFile()) return null
+    if (stat.size > MAX_AUTOFETCH_SIZE) return null
+    return readFileSync(filePath, 'utf8')
+  } catch {
+    return null
+  }
+}
 
 const config = loadHubConfig()
 const savedSessions = loadSessions()
@@ -151,6 +187,23 @@ socketServer.on('tool_call', (path: string, name: string, args: Record<string, u
             matches.slice(0, 3).map(m => `• "${m.phrase}" — ${m.context}`).join('\n') +
             `\n\nRules: ${effective.rules.slice(0, 2).join('; ')}`
           telegramFrontend?.deliverDriftAlert(session.name, notif, matches)
+        }
+      }
+    }
+
+    // Auto-fetch file content when Claude emits a bare save/write path.
+    const fetchedPath = tryAutoFetchPath(text)
+    if (fetchedPath) {
+      const lastFetch = lastAutoFetch.get(fetchedPath) ?? 0
+      if (Date.now() - lastFetch > AUTOFETCH_DEDUP_MS) {
+        lastAutoFetch.set(fetchedPath, Date.now())
+        const content = readFileSafely(fetchedPath)
+        if (content) {
+          telegramFrontend?.deliverFileContent(session.name, fetchedPath, content)
+          webFrontend?.deliverToUser(
+            session.name,
+            `📄 Contents of \`${fetchedPath}\`:\n\n\`\`\`\n${content}\n\`\`\``,
+          )
         }
       }
     }

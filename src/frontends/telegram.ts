@@ -742,6 +742,35 @@ export class TelegramFrontend {
     }
   }
 
+  async deliverFileContent(sessionName: string, filePath: string, content: string): Promise<void> {
+    const recipients = this.allowFrom.length > 0 ? this.allowFrom : [...this.knownUsers]
+    if (recipients.length === 0) return
+
+    const maxInline = 3500 // headroom for markdown code-block wrapping
+    const filename = filePath.split('/').pop() ?? 'file.txt'
+
+    if (content.length <= maxInline) {
+      const text = `[${sessionName}] 📄 \`${filePath}\`:\n\n\`\`\`\n${content}\n\`\`\``
+      for (const userId of recipients) {
+        await this.bot.api
+          .sendMessage(userId, text, { parse_mode: 'Markdown' })
+          .catch(() => {})
+      }
+      return
+    }
+
+    const buffer = Buffer.from(content, 'utf8')
+    for (const userId of recipients) {
+      try {
+        await this.bot.api.sendDocument(userId, new InputFile(buffer, filename), {
+          caption: `[${sessionName}] 📄 ${filePath} (${content.length} chars)`,
+        })
+      } catch (err) {
+        process.stderr.write(`telegram: failed to send file attachment: ${err}\n`)
+      }
+    }
+  }
+
   async deliverDriftAlert(sessionName: string, htmlMessage: string, _matches: unknown[]): Promise<void> {
     const recipients = this.allowFrom.length > 0 ? this.allowFrom : [...this.knownUsers]
     if (recipients.length === 0) return
