@@ -72,6 +72,10 @@ export class VerificationRunner {
   }
 
   async run(sessionPath: string): Promise<VerificationResult> {
+    if (this.running.has(sessionPath)) {
+      return { status: 'error', reason: 'already-running', details: sessionPath }
+    }
+
     const session = this.deps.registry.get(sessionPath)
     if (!session) {
       return { status: 'error', reason: 'spawn-failed', details: 'session not registered' }

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { probeProject, VerificationRunner } from '../src/verification'
@@ -189,5 +189,54 @@ describe('VerificationRunner.run', () => {
       expect(result.reason).toBe('timeout')
       expect(result.details).toBe('sleep 5')
     }
+  })
+
+  test('command runs in session project path', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const marker = join(dir, 'pwd-marker')
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: [`pwd > ${marker}`] },
+      }),
+    })
+    await runner.run(dir)
+    const captured = readFileSync(marker, 'utf8').trim()
+    // macOS resolves /tmp to /private/tmp; accept suffix match.
+    expect(captured.endsWith(dir) || captured === dir).toBe(true)
+  })
+
+  test('CI=true is set in subprocess env', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const marker = join(dir, 'env-marker')
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: [`echo $CI > ${marker}`] },
+      }),
+    })
+    await runner.run(dir)
+    expect(readFileSync(marker, 'utf8').trim()).toBe('true')
+  })
+
+  test('second run while first is in-flight returns already-running', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: ['sleep 0.2'] },
+      }),
+    })
+    const first = runner.run(dir)
+    // Give the first run a tick to mark itself as running.
+    await new Promise(r => setTimeout(r, 10))
+    expect(runner.isRunning(dir)).toBe(true)
+    const second = await runner.run(dir)
+    expect(second.status).toBe('error')
+    if (second.status === 'error') {
+      expect(second.reason).toBe('already-running')
+    }
+    await first
+    expect(runner.isRunning(dir)).toBe(false)
   })
 })
