@@ -563,6 +563,31 @@ export class TelegramFrontend {
         } else {
           await ctx.answerCallbackQuery('Permission request not found')
         }
+      } else {
+        const driftMatch = data.match(/^drift:(ignore|remind):(.+)$/)
+        if (driftMatch) {
+          const [, action, sessionName] = driftMatch
+          if (action === 'ignore') {
+            await ctx.answerCallbackQuery({ text: 'Ignored' })
+            await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
+            return
+          }
+          const path = this.registry.findByName(sessionName)
+          if (path) {
+            const profiles = loadProfilesForHub()
+            const rules = this.registry.getEffectiveRules(path, profiles)
+            const reminder =
+              `⚠️ Project rule reminder: ${rules.slice(0, 2).join('; ')}. ` +
+              `Please re-do your last action without shortcuts, root-causing the issue instead.`
+            this.socketServer.sendToSession(path, {
+              type: 'channel_message',
+              content: reminder,
+              meta: { source: 'hub', frontend: 'telegram', user: 'drift-check', session: sessionName },
+            })
+            await ctx.answerCallbackQuery({ text: 'Reminder sent' })
+            await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
+          }
+        }
       }
     })
 
@@ -713,6 +738,26 @@ export class TelegramFrontend {
         for (const filePath of files) {
           await this.bot.api.sendDocument(userId, new InputFile(filePath))
         }
+      }
+    }
+  }
+
+  async deliverDriftAlert(sessionName: string, htmlMessage: string, _matches: unknown[]): Promise<void> {
+    const recipients = this.allowFrom.length > 0 ? this.allowFrom : [...this.knownUsers]
+    if (recipients.length === 0) return
+
+    const keyboard = new InlineKeyboard()
+      .text('🤐 Ignore', `drift:ignore:${sessionName}`)
+      .text('📣 Remind Claude', `drift:remind:${sessionName}`)
+
+    for (const userId of recipients) {
+      try {
+        await this.bot.api.sendMessage(userId, htmlMessage, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        })
+      } catch (err) {
+        process.stderr.write(`telegram: drift alert failed: ${err}\n`)
       }
     }
   }

@@ -11,6 +11,10 @@ import { TelegramFrontend } from './frontends/telegram'
 import { WebFrontend } from './frontends/web'
 import type { PermissionRequest, Profile, FrontendSource } from './types'
 import { getProfile, resolveSession, injectContext } from './profiles'
+import { detectDrift } from './analysis'
+
+const DRIFT_RATE_LIMIT_MS = 2 * 60 * 1000 // 2 minutes between alerts per session
+const lastDriftNotif = new Map<string, number>()
 
 const config = loadHubConfig()
 const savedSessions = loadSessions()
@@ -130,6 +134,26 @@ socketServer.on('tool_call', (path: string, name: string, args: Record<string, u
       name: 'reply',
       result: 'sent',
     })
+
+    // Drift detection — advisory notification only, rate-limited per session.
+    const effective = resolveSession(
+      { appliedProfile: session.appliedProfile, profileOverrides: session.profileOverrides },
+      profiles,
+    )
+    if (effective.driftDetection && effective.rules.length > 0) {
+      const lastNotif = lastDriftNotif.get(path) ?? 0
+      if (Date.now() - lastNotif >= DRIFT_RATE_LIMIT_MS) {
+        const matches = detectDrift(text, effective.rules)
+        if (matches.length > 0) {
+          lastDriftNotif.set(path, Date.now())
+          const notif =
+            `⚠️ Possible drift in <b>${session.name}</b>:\n` +
+            matches.slice(0, 3).map(m => `• "${m.phrase}" — ${m.context}`).join('\n') +
+            `\n\nRules: ${effective.rules.slice(0, 2).join('; ')}`
+          telegramFrontend?.deliverDriftAlert(session.name, notif, matches)
+        }
+      }
+    }
   } else if (name === 'edit_message') {
     telegramFrontend?.deliverToUser(session.name, `(edited) ${args.text as string}`)
     webFrontend?.deliverToUser(session.name, `(edited) ${args.text as string}`)
