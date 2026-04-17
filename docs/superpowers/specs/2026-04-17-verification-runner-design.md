@@ -182,10 +182,10 @@ Existing built-ins in `src/profiles.ts` gain sensible `verification.commands`:
 
 | Profile     | Commands                                     |
 | ----------- | -------------------------------------------- |
-| `default`   | `[]` (probe decides)                         |
-| `tdd`       | `["bun test", "bunx tsc --noEmit"]`          |
 | `careful`   | `["bun test", "bunx tsc --noEmit"]`          |
-| `yolo`      | `[]` (verification disabled in spirit)       |
+| `tdd`       | `["bun test", "bunx tsc --noEmit"]`          |
+| `docs`      | `[]` (probe decides)                         |
+| `yolo`      | `[]` (verification off in spirit)            |
 
 The existing `VerificationConfig` type in `src/types.ts` is reused as-is
 (fields: `commands: string[]`, plus optional `sentinelPhrase` and
