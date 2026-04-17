@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { probeProject, VerificationRunner } from '../src/verification'
@@ -122,5 +122,55 @@ describe('VerificationRunner.run', () => {
     expect(runner.isRunning(dir)).toBe(false)
     await runner.run(dir)
     expect(runner.isRunning(dir)).toBe(false)
+  })
+
+  test('failing command returns fail with exit code and tail', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: ["echo something && exit 3"] },
+      }),
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('fail')
+    if (result.status === 'fail') {
+      expect(result.exitCode).toBe(3)
+      expect(result.failedCommand).toBe('echo something && exit 3')
+      expect(result.tail.join('\n')).toContain('something')
+    }
+  })
+
+  test('tail is at most 20 lines', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: ['for i in $(seq 1 50); do echo line$i; done; exit 1'] },
+      }),
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('fail')
+    if (result.status === 'fail') {
+      expect(result.tail.length).toBeLessThanOrEqual(20)
+      expect(result.tail.join('\n')).toContain('line50')
+      expect(result.tail.join('\n')).not.toContain('line10')
+    }
+  })
+
+  test('stops on first failure — second command never runs', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const sentinel = join(dir, 'sentinel')
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: {
+          commands: ['exit 1', `touch ${sentinel}`],
+        },
+      }),
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('fail')
+    expect(existsSync(sentinel)).toBe(false)
   })
 })
