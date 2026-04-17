@@ -111,16 +111,29 @@ export class VerificationRunner {
       stderr: 'pipe',
     })
 
-    const [stdoutText, stderrText, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      proc.kill('SIGKILL')
+    }, this.timeoutMs)
 
-    if (exitCode === 0) return { status: 'pass' }
+    try {
+      const [stdoutText, stderrText, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
 
-    const merged = (stdoutText + stderrText).split('\n')
-    const tail = merged.slice(Math.max(0, merged.length - TAIL_LINES))
-    return { status: 'fail', failedCommand: command, exitCode, tail }
+      if (timedOut) {
+        return { status: 'error', reason: 'timeout', details: command }
+      }
+      if (exitCode === 0) return { status: 'pass' }
+
+      const merged = (stdoutText + stderrText).split('\n')
+      const tail = merged.slice(Math.max(0, merged.length - TAIL_LINES))
+      return { status: 'fail', failedCommand: command, exitCode, tail }
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }

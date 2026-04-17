@@ -173,4 +173,21 @@ describe('VerificationRunner.run', () => {
     expect(result.status).toBe('fail')
     expect(existsSync(sentinel)).toBe(false)
   })
+
+  test('exceeding timeout returns error(timeout)', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({
+        verification: { commands: ['sleep 5'] },
+      }),
+      timeoutMs: 100,
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('error')
+    if (result.status === 'error') {
+      expect(result.reason).toBe('timeout')
+      expect(result.details).toBe('sleep 5')
+    }
+  })
 })
