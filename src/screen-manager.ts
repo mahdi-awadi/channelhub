@@ -21,11 +21,8 @@ type ManagedSession = {
   profileName?: string
 }
 
-const CLAUDE_CMD = 'claude --dangerously-load-development-channels server:hub'
-const CLAUDE_TEAM_CMD = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-load-development-channels server:hub'
-const CONFIRM_DELAY = 1500
-const CONFIRM_RETRIES = 5
-const CONFIRM_INTERVAL = 1000
+const CLAUDE_CMD = 'claude --channels plugin:channelhub@claude-plugins-official'
+const CLAUDE_TEAM_CMD = `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ${CLAUDE_CMD}`
 const GRACEFUL_CANCEL_DELAY = 300      // ms between Ctrl+C and /exit
 const GRACEFUL_POLL_INTERVAL = 250     // ms between has-session polls
 const GRACEFUL_TIMEOUT = 3000          // ms total wait before hard kill
@@ -45,40 +42,14 @@ export class ScreenManager {
     await $`tmux new-session -d -s ${sessionName} -c ${projectPath} ${CLAUDE_CMD}`.quiet()
     this.managed.set(name, { sessionName, projectPath, respawnEnabled: true, profileName })
 
-    // Auto-confirm the development channels warning, then send instructions if any
-    this.autoConfirm(sessionName, instructions)
+    if (instructions) {
+      this.deliverInitialPrompt(sessionName, instructions)
+    }
   }
 
-  private async autoConfirm(sessionName: string, initialPrompt?: string): Promise<void> {
-    await new Promise(r => setTimeout(r, CONFIRM_DELAY))
-
-    for (let i = 0; i < CONFIRM_RETRIES; i++) {
-      try {
-        const pane = await $`tmux capture-pane -t ${sessionName} -p`.quiet().text()
-        if (pane.includes('Enter to confirm')) {
-          await $`tmux send-keys -t ${sessionName} Enter`.quiet()
-          process.stderr.write(`hub: auto-confirmed dev warning for ${sessionName}\n`)
-          // Wait for Claude to fully start, then send initial prompt if provided
-          if (initialPrompt) {
-            await this.waitForReady(sessionName)
-            await this.sendPrompt(sessionName, initialPrompt)
-          }
-          return
-        }
-        // Already past the warning
-        if (pane.includes('Listening for channel') || pane.includes('╭')) {
-          if (initialPrompt) {
-            await this.waitForReady(sessionName)
-            await this.sendPrompt(sessionName, initialPrompt)
-          }
-          return
-        }
-      } catch {
-        return
-      }
-      await new Promise(r => setTimeout(r, CONFIRM_INTERVAL))
-    }
-    process.stderr.write(`hub: could not auto-confirm warning for ${sessionName} (timed out)\n`)
+  private async deliverInitialPrompt(sessionName: string, prompt: string): Promise<void> {
+    await this.waitForReady(sessionName)
+    await this.sendPrompt(sessionName, prompt)
   }
 
   private async waitForReady(sessionName: string): Promise<void> {
@@ -215,7 +186,7 @@ export class ScreenManager {
     try { await $`tmux kill-session -t ${leadSession}`.quiet() } catch {}
     await $`tmux new-session -d -s ${leadSession} -c ${projectPath} ${CLAUDE_TEAM_CMD}`.quiet()
     this.managed.set(name, { sessionName: leadSession, projectPath, respawnEnabled: true, profileName })
-    this.autoConfirm(leadSession, leadPrompt)
+    this.deliverInitialPrompt(leadSession, leadPrompt)
 
     // Wait for lead to initialize and create the team
     await new Promise(r => setTimeout(r, 8000))
@@ -227,7 +198,6 @@ export class ScreenManager {
       try { await $`tmux kill-session -t ${tmSession}`.quiet() } catch {}
       await $`tmux new-session -d -s ${tmSession} -c ${projectPath} ${CLAUDE_TEAM_CMD}`.quiet()
       this.managed.set(tmName, { sessionName: tmSession, projectPath, respawnEnabled: true, profileName })
-      this.autoConfirm(tmSession)
       await new Promise(r => setTimeout(r, 3000))
     }
   }
@@ -244,7 +214,6 @@ export class ScreenManager {
     try { await $`tmux kill-session -t ${tmSession}`.quiet() } catch {}
     await $`tmux new-session -d -s ${tmSession} -c ${leadEntry.projectPath} ${CLAUDE_TEAM_CMD}`.quiet()
     this.managed.set(tmName, { sessionName: tmSession, projectPath: leadEntry.projectPath, respawnEnabled: true })
-    this.autoConfirm(tmSession)
 
     // Tell the lead about the new teammate
     const leadSession = `hub-${leadName}`

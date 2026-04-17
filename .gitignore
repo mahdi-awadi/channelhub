@@ -43,6 +43,9 @@ config.json
 # Bun
 .bun/
 
+# Claude Code local state (per-machine settings, memory, etc.)
+.claude/
+
 # Local test artifacts
 tests/**/.test-*
 /tmp/

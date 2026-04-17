@@ -43,10 +43,10 @@ tmux new-session -d -s hub-daemon "bun run src/daemon.ts"
 ### 3. Connect Claude Code (from any project)
 ```bash
 cd /path/to/project
-claude --dangerously-load-development-channels server:hub
+claude --channels plugin:channelhub@claude-plugins-official
 ```
 
-The `server:hub` name is configured in `~/.claude.json` under `mcpServers.hub`.
+The `hub` MCP server is registered by the plugin's `.mcp.json`. Install the plugin once with `/plugin install channelhub@claude-plugins-official`.
 
 ### Attach to sessions
 ```bash
@@ -203,7 +203,7 @@ tests/
 - **Web login** via Telegram Login Widget, verified server-side with HMAC-SHA256.
 - **Daemon runs in tmux** — background `&` kills it on stdin EOF.
 - **Prompt tags** appended as `[Instructions: ...]` to messages.
-- **Spawn auto-confirms** dev channels warning via `tmux send-keys Enter` (only needed until plugin is approved).
+- **Spawn delivers initial prompts** via `tmux send-keys` after waiting for Claude's prompt indicator (`❯`).
 
 ## Development
 
