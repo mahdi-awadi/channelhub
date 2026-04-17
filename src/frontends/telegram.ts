@@ -852,6 +852,10 @@ export class TelegramFrontend {
       { command: 'all',      description: 'Broadcast to all sessions: <message>' },
       { command: 'profiles', description: 'List available profiles' },
       { command: 'profile',  description: 'Show/create/delete a profile' },
+      { command: 'rules',    description: 'Session rules: <name> [clear|text]' },
+      { command: 'fact',     description: 'Add fact to session: <name> <text>' },
+      { command: 'facts',    description: 'Show/clear facts: <name> [clear]' },
+      { command: 'channel',  description: 'Override channel instructions: <name> <reset|text>' },
     ]
     try {
       // Wipe any stale commands across every scope, then set fresh.
