@@ -6,6 +6,8 @@ import { SessionRegistry } from '../src/session-registry'
 import { SocketServer } from '../src/socket-server'
 import { PermissionEngine } from '../src/permission-engine'
 import { MessageRouter } from '../src/message-router'
+import { resolveSession, injectContext } from '../src/profiles'
+import type { FrontendSource } from '../src/types'
 import { connect } from 'net'
 
 const TEST_SOCK = join(import.meta.dir, '.test-integration.sock')
@@ -174,6 +176,54 @@ describe('integration: shim → daemon flow', () => {
     expect(msg.type).toBe('permission_response')
     expect(msg.behavior).toBe('allow')
     expect(forwardedReqs.length).toBe(0) // never escalated
+
+    sock.end()
+  })
+
+  test('rules set via registry are injected into outbound messages', async () => {
+    // Build a context-injecting router — mirrors the wrapper in daemon.ts
+    // so the assertion actually exercises the production injection path.
+    const injectingRouter = new MessageRouter(
+      registry,
+      (path, content, meta) => {
+        const session = registry.get(path)
+        let enriched = content
+        if (session) {
+          const effective = resolveSession(
+            { appliedProfile: session.appliedProfile, profileOverrides: session.profileOverrides },
+            [],
+          )
+          const frontend = (meta.frontend ?? 'web') as FrontendSource
+          enriched = injectContext(content, frontend, effective)
+        }
+        return socketServer.sendToSession(path, {
+          type: 'channel_message',
+          content: enriched,
+          meta,
+        })
+      },
+      () => {},
+    )
+
+    const sock = connect(TEST_SOCK)
+    await new Promise<void>(r => sock.on('connect', r))
+    sock.write(JSON.stringify({ type: 'register', cwd: '/home/user/ruletest' }) + '\n')
+    await new Promise<string>(resolve => { sock.once('data', chunk => resolve(chunk.toString())) })
+
+    registry.setRules('/home/user/ruletest:0', ['no shortcuts', 'use TDD'])
+    registry.setFacts('/home/user/ruletest:0', ['db is sqlite'])
+
+    injectingRouter.routeToSession('ruletest', 'fix the bug', 'telegram', 'user1')
+
+    const msgData = await new Promise<string>(resolve => {
+      sock.once('data', chunk => resolve(chunk.toString()))
+    })
+    const channelMsg = JSON.parse(msgData.trim())
+    expect(channelMsg.type).toBe('channel_message')
+    expect(channelMsg.content).toContain('no shortcuts')
+    expect(channelMsg.content).toContain('use TDD')
+    expect(channelMsg.content).toContain('db is sqlite')
+    expect(channelMsg.content).toContain('fix the bug')
 
     sock.end()
   })
