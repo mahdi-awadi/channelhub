@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { classify } from '../src/analysis'
+import { classify, detectDrift } from '../src/analysis'
 
 describe('classify (L1 static map)', () => {
   test('Read tool → silent', () => {
@@ -180,5 +180,45 @@ describe('classify edge cases', () => {
   })
   test('file path exactly equals project path → logged', () => {
     expect(classify('Write', { file_path: '/home/user/project' }, project)).toBe('logged')
+  })
+})
+
+describe('detectDrift', () => {
+  test('detects "quick fix" in reply', () => {
+    const matches = detectDrift('Let me apply a quick fix here', [])
+    expect(matches.length).toBeGreaterThan(0)
+    expect(matches[0].phrase).toMatch(/quick\s+fix/i)
+  })
+
+  test('detects "TODO" placeholder', () => {
+    const matches = detectDrift('I added a TODO to handle this later', [])
+    expect(matches.some(m => m.phrase.includes('TODO'))).toBe(true)
+  })
+
+  test('detects "commenting out" tests', () => {
+    const matches = detectDrift("I'm commenting out the failing test", [])
+    expect(matches.length).toBeGreaterThan(0)
+  })
+
+  test('no drift in clean response', () => {
+    const matches = detectDrift('Fixed the null pointer bug by adding a guard clause', [])
+    expect(matches.length).toBe(0)
+  })
+
+  test('detects "for now" shortcut', () => {
+    const matches = detectDrift("I'll leave this for now and fix it later", [])
+    expect(matches.length).toBeGreaterThan(0)
+  })
+
+  test('detects "let me just"', () => {
+    const matches = detectDrift('let me just disable this test', [])
+    expect(matches.length).toBeGreaterThan(0)
+  })
+
+  test('returns context snippet with match', () => {
+    const reply = "First line.\nI'll use a quick fix here.\nThird line."
+    const matches = detectDrift(reply, [])
+    expect(matches.length).toBeGreaterThan(0)
+    expect(matches[0].context).toContain('quick fix')
   })
 })

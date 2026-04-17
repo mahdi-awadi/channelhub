@@ -119,3 +119,41 @@ function isInsideProject(filePath: string, projectPath: string): boolean {
   const normalized = projectPath.endsWith('/') ? projectPath : projectPath + '/'
   return filePath === projectPath || filePath.startsWith(normalized)
 }
+
+export type DriftMatch = {
+  phrase: string    // the specific matched text
+  pattern: string   // which pattern matched
+  context: string   // surrounding text for display
+}
+
+const DRIFT_PATTERNS: { name: string; regex: RegExp }[] = [
+  { name: 'quick-fix', regex: /\bquick\s+fix\b/i },
+  { name: 'let-me-just', regex: /\blet\s+me\s+just\b/i },
+  { name: 'for-now', regex: /\b(for|right)\s+now\b/i },
+  { name: 'ignore-skip', regex: /\bI['’]?ll\s+(ignore|skip)\b/i },
+  { name: 'commenting-out', regex: /\bcommenting?\s+out\b/i },
+  { name: 'hack', regex: /\bhack\b/i },
+  { name: 'todo', regex: /\bTODO\b/ },
+  { name: 'fixme', regex: /\bFIXME\b/ },
+  { name: 'stubbed-out', regex: /\bstub(bed)?\s+out\b/i },
+  { name: 'skip-for-now', regex: /\bskip\s+for\s+now\b/i },
+]
+
+export function detectDrift(reply: string, _rules: string[]): DriftMatch[] {
+  const matches: DriftMatch[] = []
+  for (const { name, regex } of DRIFT_PATTERNS) {
+    const match = regex.exec(reply)
+    if (match) {
+      const idx = match.index
+      const start = Math.max(0, idx - 40)
+      const end = Math.min(reply.length, idx + match[0].length + 40)
+      const context = reply.slice(start, end).replace(/\s+/g, ' ').trim()
+      matches.push({
+        phrase: match[0],
+        pattern: name,
+        context: (start > 0 ? '...' : '') + context + (end < reply.length ? '...' : ''),
+      })
+    }
+  }
+  return matches
+}
