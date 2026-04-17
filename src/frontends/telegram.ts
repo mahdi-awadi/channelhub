@@ -396,6 +396,99 @@ export class TelegramFrontend {
       await ctx.reply(`✅ Set ${sessionName} trust to <code>${level}</code>`, { parse_mode: 'HTML' })
     })
 
+    // /rules <session> [clear|<new rule text>]
+    bot.command('rules', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const args = ctx.match?.trim() ?? ''
+      const parts = args.length > 0 ? args.split(/\s+/) : []
+      if (parts.length < 1) {
+        await ctx.reply('Usage: /rules <session> [clear|<new rule text>]')
+        return
+      }
+      const sessionName = parts[0]
+      const path = this.registry.findByName(sessionName)
+      if (!path) {
+        await ctx.reply(`Session "${sessionName}" not found`)
+        return
+      }
+
+      const profiles = loadProfilesForHub()
+
+      if (parts.length === 1) {
+        const rules = this.registry.getEffectiveRules(path, profiles)
+        if (rules.length === 0) {
+          await ctx.reply(`No rules for ${sessionName}`)
+          return
+        }
+        const text = rules.map((r, i) => `${i + 1}. ${r}`).join('\n')
+        await ctx.reply(`<b>Rules for ${sessionName}:</b>\n${text}`, { parse_mode: 'HTML' })
+        return
+      }
+
+      if (parts[1] === 'clear') {
+        this.registry.clearRules(path)
+        await ctx.reply(`🗑 Cleared rules for ${sessionName}`)
+        return
+      }
+
+      const newRule = parts.slice(1).join(' ')
+      this.registry.addRule(path, newRule, profiles)
+      await ctx.reply(`✅ Added rule to ${sessionName}: "${newRule}"`)
+    })
+
+    // /fact <session> <fact text>
+    bot.command('fact', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const args = ctx.match?.trim() ?? ''
+      const parts = args.length > 0 ? args.split(/\s+/) : []
+      if (parts.length < 2) {
+        await ctx.reply('Usage: /fact <session> <fact text>')
+        return
+      }
+      const sessionName = parts[0]
+      const path = this.registry.findByName(sessionName)
+      if (!path) {
+        await ctx.reply(`Session "${sessionName}" not found`)
+        return
+      }
+      const profiles = loadProfilesForHub()
+      const factText = parts.slice(1).join(' ')
+      this.registry.addFact(path, factText, profiles)
+      await ctx.reply(`✅ Added fact to ${sessionName}: "${factText}"`)
+    })
+
+    // /facts <session> [clear]
+    bot.command('facts', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const args = ctx.match?.trim() ?? ''
+      const parts = args.length > 0 ? args.split(/\s+/) : []
+      if (parts.length < 1) {
+        await ctx.reply('Usage: /facts <session> [clear]')
+        return
+      }
+      const sessionName = parts[0]
+      const path = this.registry.findByName(sessionName)
+      if (!path) {
+        await ctx.reply(`Session "${sessionName}" not found`)
+        return
+      }
+
+      if (parts[1] === 'clear') {
+        this.registry.clearFacts(path)
+        await ctx.reply(`🗑 Cleared facts for ${sessionName}`)
+        return
+      }
+
+      const profiles = loadProfilesForHub()
+      const facts = this.registry.getEffectiveFacts(path, profiles)
+      if (facts.length === 0) {
+        await ctx.reply(`No facts for ${sessionName}`)
+        return
+      }
+      const text = facts.map((f, i) => `${i + 1}. ${f}`).join('\n')
+      await ctx.reply(`<b>Facts for ${sessionName}:</b>\n${text}`, { parse_mode: 'HTML' })
+    })
+
     // /prefix <name> <text>
     bot.command('prefix', async (ctx) => {
       if (!this.isAllowed(ctx)) return

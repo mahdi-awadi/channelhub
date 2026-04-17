@@ -1,6 +1,6 @@
 // src/session-registry.ts
 import { basename } from 'path'
-import type { SessionState, SessionConfig, TrustLevel } from './types'
+import type { SessionState, SessionConfig, TrustLevel, Profile } from './types'
 
 type RegistryOptions = {
   defaultTrust: TrustLevel
@@ -118,6 +118,64 @@ export class SessionRegistry {
   setPrefix(path: string, prefix: string): void {
     const s = this.sessions.get(path)
     if (s) s.prefix = prefix
+  }
+
+  // Rules & facts live on profileOverrides — setting them here materializes
+  // an override that shadows whatever the applied profile specifies. Reading
+  // via getEffectiveRules/Facts falls back to the profile when no override.
+
+  setRules(path: string, rules: string[]): void {
+    const s = this.sessions.get(path)
+    if (!s) return
+    if (!s.profileOverrides) s.profileOverrides = {}
+    s.profileOverrides.rules = rules
+  }
+
+  getEffectiveRules(path: string, profiles: readonly Profile[]): string[] {
+    const s = this.sessions.get(path)
+    if (!s) return []
+    const profile = s.appliedProfile ? profiles.find(p => p.name === s.appliedProfile) : undefined
+    const overrides = s.profileOverrides?.rules
+    return overrides ?? profile?.rules ?? []
+  }
+
+  addRule(path: string, rule: string, profiles: readonly Profile[]): void {
+    const current = this.getEffectiveRules(path, profiles)
+    this.setRules(path, [...current, rule])
+  }
+
+  clearRules(path: string): void {
+    const s = this.sessions.get(path)
+    if (!s) return
+    if (!s.profileOverrides) s.profileOverrides = {}
+    s.profileOverrides.rules = []
+  }
+
+  setFacts(path: string, facts: string[]): void {
+    const s = this.sessions.get(path)
+    if (!s) return
+    if (!s.profileOverrides) s.profileOverrides = {}
+    s.profileOverrides.facts = facts
+  }
+
+  getEffectiveFacts(path: string, profiles: readonly Profile[]): string[] {
+    const s = this.sessions.get(path)
+    if (!s) return []
+    const profile = s.appliedProfile ? profiles.find(p => p.name === s.appliedProfile) : undefined
+    const overrides = s.profileOverrides?.facts
+    return overrides ?? profile?.facts ?? []
+  }
+
+  addFact(path: string, fact: string, profiles: readonly Profile[]): void {
+    const current = this.getEffectiveFacts(path, profiles)
+    this.setFacts(path, [...current, fact])
+  }
+
+  clearFacts(path: string): void {
+    const s = this.sessions.get(path)
+    if (!s) return
+    if (!s.profileOverrides) s.profileOverrides = {}
+    s.profileOverrides.facts = []
   }
 
   restoreFrom(saved: Record<string, SessionConfig>): void {

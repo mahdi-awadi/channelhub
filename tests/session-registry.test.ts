@@ -145,4 +145,72 @@ describe('SessionRegistry', () => {
     expect(entry.appliedProfile).toBe('tdd')
     expect(entry.profileOverrides).toEqual({ facts: ['test fact'] })
   })
+
+  describe('rules & facts overrides', () => {
+    const profile: import('../src/types').Profile = {
+      name: 'careful',
+      trust: 'ask',
+      rules: ['profile rule 1', 'profile rule 2'],
+      facts: ['profile fact 1'],
+      prefix: '',
+    }
+
+    test('getEffectiveRules falls back to profile rules when no override', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      expect(registry.getEffectiveRules('/home/test', [profile])).toEqual(profile.rules)
+    })
+
+    test('getEffectiveRules returns empty array when no profile and no override', () => {
+      registry.register('/home/test')
+      expect(registry.getEffectiveRules('/home/test', [profile])).toEqual([])
+    })
+
+    test('setRules overrides profile rules', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      registry.setRules('/home/test', ['custom rule'])
+      expect(registry.getEffectiveRules('/home/test', [profile])).toEqual(['custom rule'])
+    })
+
+    test('addRule appends to effective rules and materializes override', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      registry.addRule('/home/test', 'extra rule', [profile])
+      expect(registry.getEffectiveRules('/home/test', [profile])).toEqual([
+        ...profile.rules,
+        'extra rule',
+      ])
+    })
+
+    test('clearRules zeroes rules even when profile has some', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      registry.clearRules('/home/test')
+      expect(registry.getEffectiveRules('/home/test', [profile])).toEqual([])
+    })
+
+    test('getEffectiveFacts falls back to profile facts', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      expect(registry.getEffectiveFacts('/home/test', [profile])).toEqual(profile.facts)
+    })
+
+    test('addFact appends to profile facts', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      registry.addFact('/home/test', 'fact 2', [profile])
+      expect(registry.getEffectiveFacts('/home/test', [profile])).toEqual([
+        ...profile.facts,
+        'fact 2',
+      ])
+    })
+
+    test('clearFacts empties facts override', () => {
+      registry.register('/home/test', { appliedProfile: 'careful' })
+      registry.clearFacts('/home/test')
+      expect(registry.getEffectiveFacts('/home/test', [profile])).toEqual([])
+    })
+
+    test('rules methods no-op on unknown path', () => {
+      expect(() => registry.setRules('/nope', ['x'])).not.toThrow()
+      expect(() => registry.addRule('/nope', 'x', [profile])).not.toThrow()
+      expect(() => registry.clearRules('/nope')).not.toThrow()
+      expect(registry.getEffectiveRules('/nope', [profile])).toEqual([])
+    })
+  })
 })
