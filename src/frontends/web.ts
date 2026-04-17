@@ -152,6 +152,14 @@ export class WebFrontend {
           return Response.json(activity)
         }
 
+        if (url.pathname === '/api/session/rules' && req.method === 'POST') {
+          return self.handleRules(req)
+        }
+
+        if (url.pathname === '/api/session/facts' && req.method === 'POST') {
+          return self.handleFacts(req)
+        }
+
         return new Response('Not Found', { status: 404 })
       },
       websocket: {
@@ -401,6 +409,30 @@ export class WebFrontend {
       const path = this.deps.registry.findByName(name)
       if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
       this.deps.registry.setPrefix(path, text)
+      return Response.json({ ok: true })
+    } catch (err) {
+      return new Response(String(err), { status: 500 })
+    }
+  }
+
+  private async handleRules(req: Request): Promise<Response> {
+    try {
+      const { name, rules } = (await req.json()) as { name: string; rules: string[] }
+      const path = this.deps.registry.findByName(name)
+      if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
+      this.deps.registry.setRules(path, rules)
+      return Response.json({ ok: true })
+    } catch (err) {
+      return new Response(String(err), { status: 500 })
+    }
+  }
+
+  private async handleFacts(req: Request): Promise<Response> {
+    try {
+      const { name, facts } = (await req.json()) as { name: string; facts: string[] }
+      const path = this.deps.registry.findByName(name)
+      if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
+      this.deps.registry.setFacts(path, facts)
       return Response.json({ ok: true })
     } catch (err) {
       return new Response(String(err), { status: 500 })
