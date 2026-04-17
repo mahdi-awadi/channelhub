@@ -2,7 +2,9 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { probeProject } from '../src/verification'
+import { probeProject, VerificationRunner } from '../src/verification'
+import { SessionRegistry } from '../src/session-registry'
+import type { Profile } from '../src/types'
 
 describe('probeProject', () => {
   let dir: string
@@ -73,5 +75,52 @@ describe('probeProject', () => {
   test('malformed package.json → empty array (no throw)', () => {
     writeFileSync(join(dir, 'package.json'), '{ not json')
     expect(probeProject(dir)).toEqual([])
+  })
+})
+
+describe('VerificationRunner.run', () => {
+  let dir: string
+  let registry: SessionRegistry
+
+  const profiles = (extra: Partial<Profile> = {}): Profile[] => [
+    {
+      name: 'test-profile',
+      trust: 'ask',
+      rules: [],
+      facts: [],
+      prefix: '',
+      verification: { commands: [] },
+      ...extra,
+    },
+  ]
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'verify-run-'))
+    registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('happy path: single echo command returns pass', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({ verification: { commands: ['echo ok'] } }),
+    })
+    const result = await runner.run(dir)
+    expect(result.status).toBe('pass')
+  })
+
+  test('isRunning is false before run, false after run', async () => {
+    registry.register(dir, { appliedProfile: 'test-profile' })
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles({ verification: { commands: ['echo ok'] } }),
+    })
+    expect(runner.isRunning(dir)).toBe(false)
+    await runner.run(dir)
+    expect(runner.isRunning(dir)).toBe(false)
   })
 })
