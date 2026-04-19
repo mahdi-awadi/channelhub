@@ -273,4 +273,17 @@ describe('VerificationRunner.run', () => {
       expect(result.reason).toBe('no-commands')
     }
   })
+
+  test('unregistered session → error(spawn-failed)', async () => {
+    const runner = new VerificationRunner({
+      registry,
+      profiles: () => profiles(),
+    })
+    const result = await runner.run('/does/not/exist')
+    expect(result.status).toBe('error')
+    if (result.status === 'error') {
+      expect(result.reason).toBe('spawn-failed')
+      expect(result.details).toBe('session not registered')
+    }
+  })
 })

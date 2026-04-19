@@ -9,7 +9,7 @@ import type { SocketServer } from '../socket-server'
 import type { TaskMonitor } from '../task-monitor'
 import { getProfile } from '../profiles'
 import { loadProfilesForHub, saveProfilesForHub } from '../config'
-import { VerificationRunner, type VerificationResult } from '../verification'
+import type { VerificationRunner, VerificationResult } from '../verification'
 
 // ── Pure helper functions ────────────────────────────────────────────────────
 

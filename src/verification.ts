@@ -2,7 +2,8 @@
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import type { SessionRegistry } from './session-registry'
-import type { Profile } from './types'
+import type { Profile, SessionState } from './types'
+import { resolveSession } from './profiles'
 
 export type VerificationResult =
   | { status: 'pass' }
@@ -46,7 +47,6 @@ export function probeProject(projectPath: string): string[] {
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const TAIL_LINES = 20
-const RING_LINES = 200
 
 export interface VerificationRunnerDeps {
   registry: SessionRegistry
@@ -83,7 +83,7 @@ export class VerificationRunner {
 
     this.running.add(sessionPath)
     try {
-      const commands = this.resolveCommands(session.appliedProfile, session.path)
+      const commands = this.resolveCommands(session, session.path)
       if (commands.length === 0) {
         return { status: 'error', reason: 'no-commands', details: session.name }
       }
@@ -98,22 +98,34 @@ export class VerificationRunner {
     }
   }
 
-  private resolveCommands(appliedProfile: string | undefined, projectPath: string): string[] {
-    const profile = appliedProfile
-      ? this.deps.profiles().find(p => p.name === appliedProfile)
-      : undefined
-    const fromProfile = profile?.verification?.commands ?? []
+  private resolveCommands(session: SessionState, projectPath: string): string[] {
+    const effective = resolveSession(
+      { appliedProfile: session.appliedProfile, profileOverrides: session.profileOverrides },
+      this.deps.profiles(),
+    )
+    const fromProfile = effective.verification?.commands ?? []
     if (fromProfile.length > 0) return fromProfile
     return this.probeFn(projectPath)
   }
 
   private async execOne(command: string, cwd: string): Promise<VerificationResult> {
-    const proc = Bun.spawn(['bash', '-c', command], {
-      cwd,
-      env: { ...process.env, CI: 'true' },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
+    const spawn = () =>
+      Bun.spawn(['bash', '-c', command], {
+        cwd,
+        env: { ...process.env, CI: 'true' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+    let proc: ReturnType<typeof spawn>
+    try {
+      proc = spawn()
+    } catch (err) {
+      return {
+        status: 'error',
+        reason: 'spawn-failed',
+        details: err instanceof Error ? err.message : String(err),
+      }
+    }
 
     let timedOut = false
     const timer = setTimeout(() => {
