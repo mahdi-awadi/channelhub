@@ -275,20 +275,30 @@ async function start(): Promise<void> {
   process.stderr.write(`hub: web UI at http://localhost:${webFrontend.port}\n`)
 
   if (config.telegramToken) {
-    telegramFrontend = new TelegramFrontend({
-      token: config.telegramToken,
-      registry,
-      router,
-      permissions,
-      screenManager,
-      socketServer,
-      allowFrom: config.telegramAllowFrom,
-      taskMonitor,
-      verificationRunner,
-    })
-    telegramFrontend.start().catch(err => {
-      process.stderr.write(`hub: telegram failed to start: ${err}\n`)
-    })
+    if (config.telegramAllowFrom.length === 0) {
+      // Refuse to start. An empty allowlist used to mean "allow all", which
+      // makes a mis-configured bot publicly reachable by any Telegram user —
+      // equivalent to a shell on this machine once /spawn or /send lands.
+      process.stderr.write(
+        'hub: telegramToken is set but telegramAllowFrom is empty — refusing to start telegram frontend. ' +
+        'Add your Telegram user id to telegramAllowFrom in config.json.\n',
+      )
+    } else {
+      telegramFrontend = new TelegramFrontend({
+        token: config.telegramToken,
+        registry,
+        router,
+        permissions,
+        screenManager,
+        socketServer,
+        allowFrom: config.telegramAllowFrom,
+        taskMonitor,
+        verificationRunner,
+      })
+      telegramFrontend.start().catch(err => {
+        process.stderr.write(`hub: telegram failed to start: ${err}\n`)
+      })
+    }
   } else {
     process.stderr.write('hub: no telegram token — skipping telegram frontend\n')
   }

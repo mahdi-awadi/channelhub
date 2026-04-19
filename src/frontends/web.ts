@@ -307,9 +307,16 @@ export class WebFrontend {
         return new Response('Auth expired', { status: 403 })
       }
 
-      // Check if user is in allowFrom list
+      // Check if user is in allowFrom list. Empty list is DENY ALL — the
+      // previous "allow everyone" behaviour was a misconfiguration footgun.
       const userId = String(userData.id)
-      if (this.deps.telegramAllowFrom.length > 0 && !this.deps.telegramAllowFrom.includes(userId)) {
+      if (this.deps.telegramAllowFrom.length === 0) {
+        return new Response(
+          'Web auth disabled: telegramAllowFrom is empty in config.json',
+          { status: 403 },
+        )
+      }
+      if (!this.deps.telegramAllowFrom.includes(userId)) {
         return new Response('User not authorized', { status: 403 })
       }
 
