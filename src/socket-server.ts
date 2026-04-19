@@ -1,6 +1,6 @@
 // src/socket-server.ts
 import { createServer, type Server, type Socket } from 'net'
-import { unlinkSync } from 'fs'
+import { unlinkSync, chmodSync } from 'fs'
 import type { SessionRegistry } from './session-registry'
 import type { ShimToDaemon, DaemonToShim, Profile } from './types'
 import { EventEmitter } from 'events'
@@ -26,6 +26,9 @@ export class SocketServer extends EventEmitter {
       this.server!.listen(this.socketPath, () => resolve())
       this.server!.on('error', reject)
     })
+    // Lock the socket to the daemon's UID — prevents other local users on a
+    // shared host from connecting and impersonating a shim.
+    try { chmodSync(this.socketPath, 0o600) } catch {}
   }
 
   private handleConnection(socket: Socket): void {

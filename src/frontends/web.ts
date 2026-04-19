@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { writeFile } from 'fs/promises'
-import { createHmac, createHash } from 'crypto'
+import { createHmac, createHash, timingSafeEqual } from 'crypto'
 import type { SessionRegistry } from '../session-registry'
 import type { MessageRouter } from '../message-router'
 import type { PermissionEngine } from '../permission-engine'
@@ -50,6 +50,9 @@ export class WebFrontend {
 
     this.server = Bun.serve({
       port: this.deps.port,
+      // Bind loopback only — remote access must go through an authenticated
+      // reverse proxy. See README "Remote access".
+      hostname: '127.0.0.1',
       fetch(req, server) {
         const url = new URL(req.url)
 
@@ -285,7 +288,16 @@ export class WebFrontend {
         .join('\n')
       const hmac = createHmac('sha256', secretKey).update(checkString).digest('hex')
 
-      if (hmac !== hash) {
+      // Constant-time compare — length-mismatch throws, which we treat as invalid.
+      let hashMatches = false
+      try {
+        hashMatches =
+          hmac.length === hash.length &&
+          timingSafeEqual(Buffer.from(hmac, 'hex'), Buffer.from(hash, 'hex'))
+      } catch {
+        hashMatches = false
+      }
+      if (!hashMatches) {
         return new Response('Invalid auth hash', { status: 403 })
       }
 
