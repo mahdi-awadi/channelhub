@@ -75,7 +75,11 @@ export function sanitizeFilename(name: string): string {
   const base = basename(name).replace(/[^a-zA-Z0-9._-]/g, '_')
   // Forbid leading dots that could create dotfiles in unexpected places,
   // but keep them embedded (so "foo.tar.gz" is fine).
-  return base.replace(/^\.+/, '_') || 'file'
+  const stripped = base.replace(/^\.+/, '_')
+  // If the result is empty or has no alphanumerics left (e.g. "..", "///"),
+  // fall back to a generic name rather than letting a placeholder through.
+  if (!stripped || !/[a-zA-Z0-9]/.test(stripped)) return 'file'
+  return stripped
 }
 
 // Return the canonical path if `target` resolves inside `root`, else null.
