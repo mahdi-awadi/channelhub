@@ -85,6 +85,47 @@ export function chunkText(text: string, limit: number): string[] {
   return chunks
 }
 
+export async function renderVerificationResult(
+  reply: (text: string, opts?: any) => Promise<any>,
+  sessionName: string,
+  result: VerificationResult,
+): Promise<void> {
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  switch (result.status) {
+    case 'pass':
+      await reply('✅')
+      return
+    case 'fail': {
+      const text =
+        `❌ <b>${escapeHtml(sessionName)}</b> — ` +
+        `<code>${escapeHtml(result.failedCommand)}</code> (exit ${result.exitCode})\n\n` +
+        `<pre>${escapeHtml(result.tail.join('\n'))}</pre>`
+      await reply(text, { parse_mode: 'HTML' })
+      return
+    }
+    case 'error':
+      switch (result.reason) {
+        case 'timeout':
+          await reply(`⏱ ${sessionName} — "${result.details}" exceeded 120s`)
+          return
+        case 'no-commands':
+          await reply(
+            `⚠️ ${sessionName} has no verification commands. ` +
+            `Set them on the profile or add scripts to package.json.`,
+          )
+          return
+        case 'already-running':
+          await reply(`⏳ Verification already running for ${sessionName}`)
+          return
+        case 'spawn-failed':
+          await reply(`⚠️ ${sessionName}: ${result.details}`)
+          return
+      }
+  }
+}
+
 // ── TelegramFrontend class ───────────────────────────────────────────────────
 
 export type TelegramFrontendDeps = {
@@ -843,40 +884,7 @@ export class TelegramFrontend {
     sessionName: string,
     result: VerificationResult,
   ): Promise<void> {
-    const escapeHtml = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-    switch (result.status) {
-      case 'pass':
-        await ctx.reply('✅')
-        return
-      case 'fail': {
-        const text =
-          `❌ <b>${escapeHtml(sessionName)}</b> — ` +
-          `<code>${escapeHtml(result.failedCommand)}</code> (exit ${result.exitCode})\n\n` +
-          `<pre>${escapeHtml(result.tail.join('\n'))}</pre>`
-        await ctx.reply(text, { parse_mode: 'HTML' })
-        return
-      }
-      case 'error':
-        switch (result.reason) {
-          case 'timeout':
-            await ctx.reply(`⏱ ${sessionName} — "${result.details}" exceeded 120s`)
-            return
-          case 'no-commands':
-            await ctx.reply(
-              `⚠️ ${sessionName} has no verification commands. ` +
-              `Set them on the profile or add scripts to package.json.`,
-            )
-            return
-          case 'already-running':
-            await ctx.reply(`⏳ Verification already running for ${sessionName}`)
-            return
-          case 'spawn-failed':
-            await ctx.reply(`⚠️ ${sessionName}: ${result.details}`)
-            return
-        }
-    }
+    await renderVerificationResult(ctx.reply.bind(ctx), sessionName, result)
   }
 
   async deliverPermissionRequest(req: PermissionRequest): Promise<void> {

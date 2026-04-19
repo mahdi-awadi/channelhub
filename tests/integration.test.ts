@@ -9,6 +9,8 @@ import { MessageRouter } from '../src/message-router'
 import { resolveSession, injectContext } from '../src/profiles'
 import type { FrontendSource } from '../src/types'
 import { connect } from 'net'
+import { renderVerificationResult } from '../src/frontends/telegram'
+import type { VerificationResult } from '../src/verification'
 
 const TEST_SOCK = join(import.meta.dir, '.test-integration.sock')
 
@@ -226,5 +228,64 @@ describe('integration: shim → daemon flow', () => {
     expect(channelMsg.content).toContain('fix the bug')
 
     sock.end()
+  })
+
+  test('renderVerificationResult: pass sends ✅', async () => {
+    const calls: Array<{ text: string; opts?: any }> = []
+    const reply = async (text: string, opts?: any) => {
+      calls.push({ text, opts })
+    }
+    const result: VerificationResult = { status: 'pass' }
+    await renderVerificationResult(reply, 'myproj', result)
+    expect(calls).toEqual([{ text: '✅', opts: undefined }])
+  })
+
+  test('renderVerificationResult: fail includes command, exit code, tail', async () => {
+    const calls: Array<{ text: string; opts?: any }> = []
+    const reply = async (text: string, opts?: any) => {
+      calls.push({ text, opts })
+    }
+    const result: VerificationResult = {
+      status: 'fail',
+      failedCommand: 'bun test',
+      exitCode: 2,
+      tail: ['line1', 'line2'],
+    }
+    await renderVerificationResult(reply, 'myproj', result)
+    expect(calls.length).toBe(1)
+    expect(calls[0].text).toContain('myproj')
+    expect(calls[0].text).toContain('bun test')
+    expect(calls[0].text).toContain('exit 2')
+    expect(calls[0].text).toContain('line1')
+    expect(calls[0].text).toContain('line2')
+    expect(calls[0].opts?.parse_mode).toBe('HTML')
+  })
+
+  test('renderVerificationResult: timeout, no-commands, already-running, spawn-failed', async () => {
+    const scenarios: Array<{ result: VerificationResult; mustContain: string }> = [
+      {
+        result: { status: 'error', reason: 'timeout', details: 'bun test' },
+        mustContain: '120s',
+      },
+      {
+        result: { status: 'error', reason: 'no-commands', details: 'myproj' },
+        mustContain: 'no verification commands',
+      },
+      {
+        result: { status: 'error', reason: 'already-running', details: '/x' },
+        mustContain: 'already running',
+      },
+      {
+        result: { status: 'error', reason: 'spawn-failed', details: 'session not registered' },
+        mustContain: 'session not registered',
+      },
+    ]
+    for (const { result, mustContain } of scenarios) {
+      const calls: string[] = []
+      await renderVerificationResult(async (t: string) => {
+        calls.push(t)
+      }, 'myproj', result)
+      expect(calls[0]).toContain(mustContain)
+    }
   })
 })
