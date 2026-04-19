@@ -1,7 +1,14 @@
 // tests/frontends/web.test.ts
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { WebFrontend } from '../../src/frontends/web'
+import { WebFrontend, signSession } from '../../src/frontends/web'
 import { SessionRegistry } from '../../src/session-registry'
+
+const TOKEN = 'test-bot-token'
+const ALLOWED_USER = '123'
+
+function authCookie(userId = ALLOWED_USER): string {
+  return `hub_session=${signSession(userId, TOKEN)}`
+}
 
 describe('WebFrontend', () => {
   let web: WebFrontend
@@ -17,9 +24,9 @@ describe('WebFrontend', () => {
       permissions: null as any,
       socketServer: null as any,
       screenManager: null as any,
-      telegramToken: '',
+      telegramToken: TOKEN,
       telegramBotUsername: '',
-      telegramAllowFrom: [],
+      telegramAllowFrom: [ALLOWED_USER],
       taskMonitor: null,
     })
     await web.start()
@@ -29,15 +36,22 @@ describe('WebFrontend', () => {
     await web.stop()
   })
 
-  test('GET /api/sessions returns session list', async () => {
+  test('GET /api/sessions requires auth cookie — rejects without', async () => {
     const res = await fetch(`http://localhost:${web.port}/api/sessions`)
+    expect(res.status).toBe(401)
+  })
+
+  test('GET /api/sessions with valid cookie returns session list', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/sessions`, {
+      headers: { Cookie: authCookie() },
+    })
     expect(res.status).toBe(200)
     const data = await res.json() as any[]
     expect(data.length).toBe(1)
     expect(data[0].name).toBe('frontend')
   })
 
-  test('GET / serves HTML', async () => {
+  test('GET / serves HTML without auth', async () => {
     const res = await fetch(`http://localhost:${web.port}/`)
     expect(res.status).toBe(200)
     const text = await res.text()

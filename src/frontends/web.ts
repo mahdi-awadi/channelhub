@@ -12,6 +12,62 @@ import type { ScreenManager } from '../screen-manager'
 import type { PermissionRequest, TrustLevel } from '../types'
 import type { TaskMonitor } from '../task-monitor'
 
+const COOKIE_NAME = 'hub_session'
+const COOKIE_MAX_AGE_SEC = 86400 // 24h
+
+// Mini-JWT-ish token: `<b64url(payload)>.<hex(hmac)>`. Payload is a JSON
+// { userId, issuedAt }. Secret is derived from the Telegram bot token so
+// we don't need another config field.
+export function signSession(userId: string, secret: string, now = Date.now()): string {
+  const payload = JSON.stringify({ userId, issuedAt: now })
+  const payloadB64 = Buffer.from(payload, 'utf8').toString('base64url')
+  const mac = createHmac('sha256', secret).update(payloadB64).digest('hex')
+  return `${payloadB64}.${mac}`
+}
+
+export function verifySession(
+  token: string,
+  secret: string,
+  maxAgeSec = COOKIE_MAX_AGE_SEC,
+  now = Date.now(),
+): { userId: string } | null {
+  if (!token || typeof token !== 'string') return null
+  const dot = token.indexOf('.')
+  if (dot < 1 || dot === token.length - 1) return null
+  const payloadB64 = token.slice(0, dot)
+  const mac = token.slice(dot + 1)
+  const expected = createHmac('sha256', secret).update(payloadB64).digest('hex')
+  let match = false
+  try {
+    match =
+      mac.length === expected.length &&
+      timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(expected, 'hex'))
+  } catch {
+    match = false
+  }
+  if (!match) return null
+  let payload: { userId?: unknown; issuedAt?: unknown }
+  try {
+    payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (typeof payload.userId !== 'string' || typeof payload.issuedAt !== 'number') return null
+  if (now - payload.issuedAt > maxAgeSec * 1000) return null
+  return { userId: payload.userId }
+}
+
+function parseCookie(header: string | null, name: string): string | null {
+  if (!header) return null
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq < 1) continue
+    const k = part.slice(0, eq).trim()
+    if (k === name) return decodeURIComponent(part.slice(eq + 1).trim())
+  }
+  return null
+}
+
 type WebFrontendDeps = {
   port: number
   registry: SessionRegistry
@@ -56,8 +112,23 @@ export class WebFrontend {
       fetch(req, server) {
         const url = new URL(req.url)
 
+        // Auth: anything under /api except the Telegram login endpoint requires
+        // a valid hub_session cookie issued by handleTelegramAuth. Same for
+        // WebSocket upgrades. Static assets (/, favicon) are public.
+        const isAuthEndpoint = url.pathname === '/api/auth/telegram'
+        const isStatic =
+          url.pathname === '/' ||
+          url.pathname === '/index.html' ||
+          url.pathname === '/favicon.ico'
+        const isWsUpgrade = url.pathname === '/ws'
+        const requiresAuth = (url.pathname.startsWith('/api/') && !isAuthEndpoint) || isWsUpgrade
+        if (requiresAuth) {
+          const session = self.authenticate(req)
+          if (!session) return new Response('Unauthorized', { status: 401 })
+        }
+
         // WebSocket upgrade
-        if (url.pathname === '/ws') {
+        if (isWsUpgrade) {
           const upgraded = server.upgrade(req, { data: {} })
           if (upgraded) return undefined as unknown as Response
           return new Response('WebSocket upgrade failed', { status: 400 })
@@ -81,7 +152,7 @@ export class WebFrontend {
         }
 
         // Telegram login verification
-        if (url.pathname === '/api/auth/telegram' && req.method === 'POST') {
+        if (isAuthEndpoint && req.method === 'POST') {
           return self.handleTelegramAuth(req)
         }
 
@@ -271,6 +342,19 @@ export class WebFrontend {
     }
   }
 
+  // Returns the authenticated user id if the request has a valid session
+  // cookie AND that user is still in the allowlist. Null otherwise.
+  private authenticate(req: Request): { userId: string } | null {
+    if (!this.deps.telegramToken) return null
+    if (this.deps.telegramAllowFrom.length === 0) return null
+    const token = parseCookie(req.headers.get('cookie'), COOKIE_NAME)
+    if (!token) return null
+    const verified = verifySession(token, this.deps.telegramToken)
+    if (!verified) return null
+    if (!this.deps.telegramAllowFrom.includes(verified.userId)) return null
+    return verified
+  }
+
   private async handleTelegramAuth(req: Request): Promise<Response> {
     try {
       const data = await req.json() as Record<string, any>
@@ -320,7 +404,18 @@ export class WebFrontend {
         return new Response('User not authorized', { status: 403 })
       }
 
-      return Response.json({ ok: true, user: userData })
+      // Issue session cookie — HttpOnly so JS can't read it, SameSite=Strict
+      // so a malicious site can't POST to /api/* with this user's credentials.
+      const cookie = signSession(userId, this.deps.telegramToken)
+      const cookieHeader =
+        `${COOKIE_NAME}=${cookie}; Max-Age=${COOKIE_MAX_AGE_SEC}; Path=/; ` +
+        `HttpOnly; SameSite=Strict`
+      return new Response(JSON.stringify({ ok: true, user: userData }), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': cookieHeader,
+        },
+      })
     } catch (err) {
       return new Response('Auth failed', { status: 500 })
     }
