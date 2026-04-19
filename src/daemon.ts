@@ -13,6 +13,7 @@ import { WebFrontend } from './frontends/web'
 import type { PermissionRequest, Profile, FrontendSource } from './types'
 import { getProfile, resolveSession, injectContext } from './profiles'
 import { detectDrift } from './analysis'
+import { VerificationRunner } from './verification'
 
 const DRIFT_RATE_LIMIT_MS = 2 * 60 * 1000 // 2 minutes between alerts per session
 const lastDriftNotif = new Map<string, number>()
@@ -76,6 +77,11 @@ const registry = new SessionRegistry({
   defaultUploadDir: config.defaultUploadDir,
 })
 registry.restoreFrom(savedSessions)
+
+const verificationRunner = new VerificationRunner({
+  registry,
+  profiles: getProfiles,
+})
 
 // Permission engine
 let telegramFrontend: TelegramFrontend | null = null
@@ -278,6 +284,7 @@ async function start(): Promise<void> {
       socketServer,
       allowFrom: config.telegramAllowFrom,
       taskMonitor,
+      verificationRunner,
     })
     telegramFrontend.start().catch(err => {
       process.stderr.write(`hub: telegram failed to start: ${err}\n`)

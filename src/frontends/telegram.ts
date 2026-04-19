@@ -9,6 +9,7 @@ import type { SocketServer } from '../socket-server'
 import type { TaskMonitor } from '../task-monitor'
 import { getProfile } from '../profiles'
 import { loadProfilesForHub, saveProfilesForHub } from '../config'
+import { VerificationRunner } from '../verification'
 
 // ── Pure helper functions ────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export function chunkText(text: string, limit: number): string[] {
 
 // ── TelegramFrontend class ───────────────────────────────────────────────────
 
-type TelegramFrontendDeps = {
+export type TelegramFrontendDeps = {
   token: string
   registry: SessionRegistry
   router: MessageRouter
@@ -95,6 +96,7 @@ type TelegramFrontendDeps = {
   socketServer: SocketServer
   allowFrom: string[]
   taskMonitor: TaskMonitor | null
+  verificationRunner: VerificationRunner
 }
 
 export class TelegramFrontend {
@@ -106,6 +108,7 @@ export class TelegramFrontend {
   private socketServer: SocketServer
   private allowFrom: string[]
   private taskMonitor: TaskMonitor | null
+  private verificationRunner: VerificationRunner
 
   // Per-user active session: telegram user id → session name
   private userActiveSessions = new Map<string, string>()
@@ -124,6 +127,7 @@ export class TelegramFrontend {
     this.socketServer = deps.socketServer
     this.allowFrom = deps.allowFrom
     this.taskMonitor = deps.taskMonitor
+    this.verificationRunner = deps.verificationRunner
 
     this.registerHandlers()
   }
