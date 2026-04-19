@@ -9,7 +9,7 @@ import type { SocketServer } from '../socket-server'
 import type { TaskMonitor } from '../task-monitor'
 import { getProfile } from '../profiles'
 import { loadProfilesForHub, saveProfilesForHub } from '../config'
-import { VerificationRunner } from '../verification'
+import { VerificationRunner, type VerificationResult } from '../verification'
 
 // ── Pure helper functions ────────────────────────────────────────────────────
 
@@ -486,6 +486,24 @@ export class TelegramFrontend {
       await ctx.reply(`✅ Channel instructions for ${sessionName} updated`)
     })
 
+    // /verify <session>
+    bot.command('verify', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const sessionName = (ctx.match ?? '').trim()
+      if (!sessionName) {
+        await ctx.reply('Usage: /verify <session>')
+        return
+      }
+      const path = this.registry.findByName(sessionName)
+      if (!path) {
+        await ctx.reply(`Session "${sessionName}" not found`)
+        return
+      }
+
+      const result = await this.verificationRunner.run(path)
+      await this.sendVerificationResult(ctx, sessionName, result)
+    })
+
     // /facts <session> [clear]
     bot.command('facts', async (ctx) => {
       if (!this.isAllowed(ctx)) return
@@ -820,6 +838,47 @@ export class TelegramFrontend {
     }
   }
 
+  private async sendVerificationResult(
+    ctx: { reply: (text: string, opts?: any) => Promise<any> },
+    sessionName: string,
+    result: VerificationResult,
+  ): Promise<void> {
+    const escapeHtml = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+    switch (result.status) {
+      case 'pass':
+        await ctx.reply('✅')
+        return
+      case 'fail': {
+        const text =
+          `❌ <b>${escapeHtml(sessionName)}</b> — ` +
+          `<code>${escapeHtml(result.failedCommand)}</code> (exit ${result.exitCode})\n\n` +
+          `<pre>${escapeHtml(result.tail.join('\n'))}</pre>`
+        await ctx.reply(text, { parse_mode: 'HTML' })
+        return
+      }
+      case 'error':
+        switch (result.reason) {
+          case 'timeout':
+            await ctx.reply(`⏱ ${sessionName} — "${result.details}" exceeded 120s`)
+            return
+          case 'no-commands':
+            await ctx.reply(
+              `⚠️ ${sessionName} has no verification commands. ` +
+              `Set them on the profile or add scripts to package.json.`,
+            )
+            return
+          case 'already-running':
+            await ctx.reply(`⏳ Verification already running for ${sessionName}`)
+            return
+          case 'spawn-failed':
+            await ctx.reply(`⚠️ ${sessionName}: ${result.details}`)
+            return
+        }
+    }
+  }
+
   async deliverPermissionRequest(req: PermissionRequest): Promise<void> {
     const recipients = this.allowFrom.length > 0 ? this.allowFrom : [...this.knownUsers]
     if (recipients.length === 0) return
@@ -860,6 +919,7 @@ export class TelegramFrontend {
       { command: 'fact',     description: 'Add fact to session: <name> <text>' },
       { command: 'facts',    description: 'Show/clear facts: <name> [clear]' },
       { command: 'channel',  description: 'Override channel instructions: <name> <reset|text>' },
+      { command: 'verify',   description: 'Run verification commands: <session>' },
     ]
     try {
       // Wipe any stale commands across every scope, then set fresh.
