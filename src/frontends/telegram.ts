@@ -710,12 +710,19 @@ export class TelegramFrontend {
         const buf = Buffer.from(await res.arrayBuffer())
 
         const ext = file.file_path.split('.').pop() ?? 'jpg'
+        // Photo filename is server-generated so sanitization is light —
+        // but we still scope the destination to the session's project root
+        // in case session.uploadDir has been crafted to escape.
         const fileName = `photo-${Date.now()}.${ext}`
         const { mkdirSync, writeFileSync } = await import('fs')
         const { join: pathJoin } = await import('path')
-        const uploadDir = pathJoin(session.path.replace(/:\d+$/, ''), session.uploadDir)
+        const projectRoot = session.path.replace(/:\d+$/, '')
+        const uploadDir = pathJoin(projectRoot, session.uploadDir)
         mkdirSync(uploadDir, { recursive: true })
         const destPath = pathJoin(uploadDir, fileName)
+        if (!destPath.startsWith(projectRoot + '/') && destPath !== projectRoot) {
+          throw new Error('Upload path escapes project root')
+        }
         writeFileSync(destPath, buf)
 
         // Notify Claude via channel
@@ -760,12 +767,22 @@ export class TelegramFrontend {
         const res = await fetch(url)
         const buf = Buffer.from(await res.arrayBuffer())
 
-        const fileName = doc.file_name ?? `file-${Date.now()}`
+        // doc.file_name is attacker-controlled; sanitize and confirm the
+        // final path stays inside the session's project root.
+        const rawName = doc.file_name ?? `file-${Date.now()}`
+        const fileName = rawName
+          .split(/[\\/]/).pop()!
+          .replace(/[^a-zA-Z0-9._-]/g, '_')
+          .replace(/^\.+/, '_') || `file-${Date.now()}`
         const { mkdirSync, writeFileSync } = await import('fs')
         const { join: pathJoin } = await import('path')
-        const uploadDir = pathJoin(session.path.replace(/:\d+$/, ''), session.uploadDir)
+        const projectRoot = session.path.replace(/:\d+$/, '')
+        const uploadDir = pathJoin(projectRoot, session.uploadDir)
         mkdirSync(uploadDir, { recursive: true })
         const destPath = pathJoin(uploadDir, fileName)
+        if (!destPath.startsWith(projectRoot + '/') && destPath !== projectRoot) {
+          throw new Error('Upload path escapes project root')
+        }
         writeFileSync(destPath, buf)
 
         // Notify Claude via channel

@@ -1,6 +1,7 @@
 // src/frontends/web.ts
 import { readFileSync, readdirSync, statSync } from 'fs'
-import { join, dirname } from 'path'
+import { join, dirname, resolve, basename, relative } from 'path'
+import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { writeFile } from 'fs/promises'
 import { createHmac, createHash, timingSafeEqual } from 'crypto'
@@ -66,6 +67,26 @@ function parseCookie(header: string | null, name: string): string | null {
     if (k === name) return decodeURIComponent(part.slice(eq + 1).trim())
   }
   return null
+}
+
+// Sanitize a user-supplied filename so it cannot traverse out of the upload
+// directory: strip any path components and anything outside [A-Za-z0-9._-].
+export function sanitizeFilename(name: string): string {
+  const base = basename(name).replace(/[^a-zA-Z0-9._-]/g, '_')
+  // Forbid leading dots that could create dotfiles in unexpected places,
+  // but keep them embedded (so "foo.tar.gz" is fine).
+  return base.replace(/^\.+/, '_') || 'file'
+}
+
+// Return the canonical path if `target` resolves inside `root`, else null.
+// Both sides are resolved to absolute paths before comparing.
+export function pathInsideRoot(target: string, root: string): string | null {
+  const absRoot = resolve(root)
+  const absTarget = resolve(target)
+  const rel = relative(absRoot, absTarget)
+  if (rel === '') return absTarget
+  if (rel.startsWith('..') || rel.startsWith('/')) return null
+  return absTarget
 }
 
 type WebFrontendDeps = {
@@ -156,17 +177,24 @@ export class WebFrontend {
           return self.handleTelegramAuth(req)
         }
 
-        // Browse directories
+        // Browse directories — scoped to subtrees of $HOME so an attacker
+        // (post-auth, so the allowlist holds) can't enumerate /etc, /root,
+        // or /home/<other-user>. Users who want a different root must run
+        // the daemon as a user whose $HOME is that root.
         if (url.pathname === '/api/browse' && req.method === 'GET') {
-          const dirPath = url.searchParams.get('path') || '/home/'
+          const requested = url.searchParams.get('path') || homedir() + '/'
+          const scoped = pathInsideRoot(requested, homedir())
+          if (!scoped) {
+            return new Response('Path outside allowed root', { status: 403 })
+          }
           try {
-            const entries = readdirSync(dirPath)
+            const entries = readdirSync(scoped)
             const dirs = entries
               .filter(e => {
-                try { return statSync(join(dirPath, e)).isDirectory() && !e.startsWith('.') } catch { return false }
+                try { return statSync(join(scoped, e)).isDirectory() && !e.startsWith('.') } catch { return false }
               })
               .sort()
-              .map(e => join(dirPath, e) + '/')
+              .map(e => join(scoped, e) + '/')
             return Response.json(dirs)
           } catch {
             return Response.json([])
@@ -332,11 +360,11 @@ export class WebFrontend {
       const { mkdirSync, writeFileSync } = await import('fs')
       const tmpDir = join('/tmp', 'hub-uploads')
       mkdirSync(tmpDir, { recursive: true })
-      const fileName = `${Date.now()}-${file.name}`
-      const destPath = join(tmpDir, fileName)
+      const safeName = sanitizeFilename(file.name)
+      const destPath = join(tmpDir, `${Date.now()}-${safeName}`)
       writeFileSync(destPath, Buffer.from(await file.arrayBuffer()))
 
-      return Response.json({ path: destPath, name: file.name })
+      return Response.json({ path: destPath, name: safeName })
     } catch (err) {
       return new Response('Upload failed', { status: 500 })
     }
@@ -437,7 +465,17 @@ export class WebFrontend {
       }
 
       const session = this.deps.registry.get(path)!
-      const savePath = join(session.uploadDir, file.name)
+      // Resolve uploadDir against the session's project root so a relative
+      // uploadDir like "." lands in the project, not the daemon's cwd. Then
+      // sanitize the filename and confirm the final path stays inside the
+      // project root (defense against traversal via a crafted uploadDir).
+      const projectRoot = this.deps.registry.folderPath(session.path)
+      const dir = resolve(projectRoot, session.uploadDir)
+      const safeName = sanitizeFilename(file.name)
+      const savePath = pathInsideRoot(join(dir, safeName), projectRoot)
+      if (!savePath) {
+        return new Response('Refusing to write outside project root', { status: 400 })
+      }
       const buffer = await file.arrayBuffer()
       await writeFile(savePath, new Uint8Array(buffer))
 

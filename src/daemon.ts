@@ -198,18 +198,27 @@ socketServer.on('tool_call', (path: string, name: string, args: Record<string, u
     }
 
     // Auto-fetch file content when Claude emits a bare save/write path.
+    // Scope strictly to the session's project root so a prompt-injected
+    // reply can't trick us into reading /home/you/.ssh/id_rsa and forwarding
+    // it to the user's Telegram.
     const fetchedPath = tryAutoFetchPath(text)
     if (fetchedPath) {
-      const lastFetch = lastAutoFetch.get(fetchedPath) ?? 0
-      if (Date.now() - lastFetch > AUTOFETCH_DEDUP_MS) {
-        lastAutoFetch.set(fetchedPath, Date.now())
-        const content = readFileSafely(fetchedPath)
-        if (content) {
-          telegramFrontend?.deliverFileContent(session.name, fetchedPath, content)
-          webFrontend?.deliverToUser(
-            session.name,
-            `📄 Contents of \`${fetchedPath}\`:\n\n\`\`\`\n${content}\n\`\`\``,
-          )
+      const projectRoot = registry.folderPath(session.path)
+      const inside =
+        fetchedPath === projectRoot ||
+        fetchedPath.startsWith(projectRoot + '/')
+      if (inside) {
+        const lastFetch = lastAutoFetch.get(fetchedPath) ?? 0
+        if (Date.now() - lastFetch > AUTOFETCH_DEDUP_MS) {
+          lastAutoFetch.set(fetchedPath, Date.now())
+          const content = readFileSafely(fetchedPath)
+          if (content) {
+            telegramFrontend?.deliverFileContent(session.name, fetchedPath, content)
+            webFrontend?.deliverToUser(
+              session.name,
+              `📄 Contents of \`${fetchedPath}\`:\n\n\`\`\`\n${content}\n\`\`\``,
+            )
+          }
         }
       }
     }
