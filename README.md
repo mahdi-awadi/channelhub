@@ -206,7 +206,7 @@ The hub monitors `~/.claude/tasks/` for agent team task files and displays progr
 |-------|------|---------|-------------|
 | `webPort` | number | 3000 | Web dashboard and API port |
 | `telegramToken` | string | `""` | Bot token from [@BotFather](https://t.me/BotFather) |
-| `telegramAllowFrom` | string[] | `[]` | Telegram user IDs allowed (empty = allow all) |
+| `telegramAllowFrom` | string[] | `[]` | Telegram user IDs allowed. **Empty = deny all.** The Telegram frontend refuses to start and web auth rejects every login when this list is empty. |
 | `defaultTrust` | `"ask"` \| `"auto-approve"` | `"ask"` | Default permission mode for new sessions |
 | `defaultUploadDir` | string | `"."` | Upload directory relative to project root |
 
@@ -230,15 +230,28 @@ HUB_URL=http://localhost:3000 bun run src/cli.ts <command>
 | `rename <old> <new>` | Rename session |
 | `upload <name> <file>` | Upload file to project |
 
+## Security Model
+
+ChannelHub runs as **you** on your own machine and treats anyone who can authenticate as having your shell. Accordingly:
+
+- **The web server binds to `127.0.0.1` only.** It is not reachable from the LAN. Remote access must go through a reverse proxy or tunnel (see below).
+- **Authentication is cookie-based.** Logging in via the Telegram Login Widget verifies an HMAC and sets an `HttpOnly`, `SameSite=Strict` session cookie signed with your bot token. Every `/api/*` request and WebSocket upgrade requires that cookie; unauthenticated requests return `401`.
+- **`telegramAllowFrom` is deny-by-default.** Leaving the list empty disables both the Telegram frontend (refuses to start) and web login. There is no "allow everyone" mode.
+- **The Unix socket is `0600`** and restricted to your UID, so other local users cannot impersonate a shim.
+- **Uploads are sanitized and scoped** — filenames are stripped of path separators and unsafe characters; the resolved destination must stay inside the session's project directory.
+- **Auto-fetched file contents** (when Claude says "saved to /path/..." and the hub forwards the file body to your Telegram/web) are scoped to each session's project root. Prompt-injection cannot make the daemon read `~/.ssh/` or `/etc/`.
+
 ## Exposing the Web Dashboard
 
-The web dashboard runs on localhost by default. To access it remotely, use any reverse proxy:
+The web dashboard runs on `127.0.0.1` only. To access it remotely, put an authenticated proxy in front — the dashboard's own cookie auth is not a substitute for TLS + an external access control. Options:
 
-- **Nginx / Traefik / Caddy** — point your domain to `http://localhost:<webPort>`, ensure WebSocket passthrough
-- **Tailscale / ngrok / Cloudflare Tunnel** — for quick remote access without a domain
-- **SSH tunnel** — `ssh -L 3000:localhost:3000 your-server`
+- **Nginx / Traefik / Caddy with TLS and basic auth or SSO** — point your domain to `http://127.0.0.1:<webPort>`, enable WebSocket passthrough, require authentication at the proxy.
+- **Tailscale / Cloudflare Tunnel** — identity-aware tunnels. Good default for personal use.
+- **SSH tunnel** — `ssh -L 3000:localhost:3000 your-server`. Simplest; only you have the key.
 
-The dashboard uses Telegram Login Widget for authentication, so configure your bot's domain in @BotFather (`/setdomain`) if exposing publicly.
+Do not expose the port directly (`0.0.0.0` or a public address) — the daemon deliberately refuses that binding for safety, and proxying is cheap.
+
+Configure your bot's domain in @BotFather (`/setdomain`) so the Telegram Login Widget works on your proxy domain.
 
 ## Prerequisites
 
