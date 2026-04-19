@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Sub-phase 1d: verification runner. New `/verify <session>` Telegram command runs profile-defined verification commands (or auto-detected `package.json` scripts) in the session's project directory. Silent on success, detailed failure report with exit code and 20-line output tail. Per-command 120s timeout, single concurrent run per session.
+- Built-in profiles `tdd` and `careful` gain default verification commands (`bun test`, `bunx tsc --noEmit`).
+
 ## [0.1.0-beta.1] - 2026-04-07
 
 ### Added

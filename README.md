@@ -149,11 +149,23 @@ tmux new-session -d -s hub-daemon "bun run ~/.channelhub/src/daemon.ts"
 | `/prefix <name> <text>` | Set command prefix for a session |
 | `/rename <old> <new>` | Rename a session |
 | `/all <message>` | Broadcast to all sessions |
+| `/verify <name>` | Run the session's verification commands (tests, typecheck, lint) |
 
 **Message routing:**
 - Plain text goes to your active session
 - `/<session-name> message` targets a specific session
 - Send a photo or document to upload it to the active session's project folder
+
+### Verification
+
+Running `/verify <session>` executes the session's profile-defined verification commands against the session's project directory. If the applied profile has no commands, the runner auto-detects them from the project's `package.json` scripts (`test`, `typecheck`, `lint`).
+
+Commands run sequentially and stop on the first failure. You get `✅` back on success, or a failure message containing the failed command, exit code, and the last 20 lines of merged stdout/stderr on failure. Per-command timeout is 120 seconds.
+
+Built-in profiles with defaults:
+- **careful** — `bun test`, `bunx tsc --noEmit`
+- **tdd** — `bun test`, `bunx tsc --noEmit`
+- **docs** / **yolo** — no commands (probe decides from `package.json`)
 
 ## Web Dashboard
 

@@ -100,6 +100,7 @@ Commands:
 - `/prefix <name> <text>` — set command prefix
 - `/rename <old> <new>` — rename session
 - `/all <message>` — broadcast to all sessions
+- `/verify <name>` — run the session's verification commands
 - Send photo/document — uploaded to active session's project folder
 
 Message routing:
@@ -185,6 +186,7 @@ src/
   message-router.ts      # Route messages with prefix, broadcast, targeting
   screen-manager.ts      # Spawn/kill/respawn sessions in tmux
   task-monitor.ts        # Watch ~/.claude/tasks/ for agent team tasks
+  verification.ts        # Subprocess-based verification runner + package.json probe
   frontends/
     telegram.ts          # Grammy bot with commands + photo/document upload
     web.ts               # Bun HTTP + WebSocket server + Telegram login
@@ -204,6 +206,7 @@ tests/
 - **Daemon runs in tmux** — background `&` kills it on stdin EOF.
 - **Prompt tags** appended as `[Instructions: ...]` to messages.
 - **Spawn auto-confirms** dev channels warning via `tmux send-keys Enter` (only needed until plugin is approved).
+- **Verification runner** — `src/verification.ts` spawns `bash -c "<cmd>"` per profile-defined command with a 120s timeout, CWD set to the session's project path, `CI=true` in env. Single concurrent run per session; silent on success; 20-line tail on failure.
 
 ## Development
 
