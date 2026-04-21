@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-04-21
+
 ### Security
 - **Breaking — web frontend now binds to `127.0.0.1` only.** The previous default of `0.0.0.0` exposed an unauthenticated API on the LAN. Use a reverse proxy (Nginx/Caddy/Tailscale/SSH tunnel) for remote access.
 - **Breaking — web API and WebSocket now require authentication.** Successful Telegram login sets a signed `HttpOnly`/`SameSite=Strict` `hub_session` cookie. Every `/api/*` call and WS upgrade validates the cookie and rejects with 401 otherwise. The Telegram Login Widget verification is no longer cosmetic.
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sub-phase 1d: verification runner. New `/verify <session>` Telegram command runs profile-defined verification commands (or auto-detected `package.json` scripts) in the session's project directory. Silent on success, detailed failure report with exit code and 20-line output tail. Per-command 120s timeout, single concurrent run per session.
 - Built-in profiles `tdd` and `careful` gain default verification commands (`bun test`, `bunx tsc --noEmit`).
 - `tests/frontends/web-auth.test.ts`: 26 tests covering HMAC correctness, cookie signing, session verification, filename sanitization, path scoping, and the full auth middleware.
+- `webHost` config option to override the default `127.0.0.1` bind address. Lets a containerized reverse proxy reach the daemon on a private bridge IP (e.g. `172.20.0.1`) without exposing it to the LAN. Defaults unchanged.
 
 ## [0.1.0-beta.1] - 2026-04-07
 
@@ -45,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Skills (`configure`, `access`) for in-session setup help
 - 65 tests covering registry, socket, router, permissions, screen, task monitor, frontends
 
-[Unreleased]: https://github.com/mahdi-awadi/channelhub/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/mahdi-awadi/channelhub/compare/v0.1.0-beta.2...HEAD
+[0.1.0-beta.2]: https://github.com/mahdi-awadi/channelhub/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/mahdi-awadi/channelhub/releases/tag/v0.1.0-beta.1
