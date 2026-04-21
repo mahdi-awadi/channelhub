@@ -95,6 +95,7 @@ export function pathInsideRoot(target: string, root: string): string | null {
 
 type WebFrontendDeps = {
   port: number
+  host?: string
   registry: SessionRegistry
   router: MessageRouter | null
   permissions: PermissionEngine | null
@@ -131,9 +132,11 @@ export class WebFrontend {
 
     this.server = Bun.serve({
       port: this.deps.port,
-      // Bind loopback only — remote access must go through an authenticated
-      // reverse proxy. See README "Remote access".
-      hostname: '127.0.0.1',
+      // Default loopback — remote access must go through an authenticated
+      // reverse proxy. Operators can override via config.webHost to bind to
+      // a private bridge IP (e.g. 172.20.0.1) so a containerized proxy can
+      // reach it. See README "Remote access".
+      hostname: this.deps.host ?? '127.0.0.1',
       fetch(req, server) {
         const url = new URL(req.url)
 
