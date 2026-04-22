@@ -144,6 +144,7 @@ tmux new-session -d -s hub-daemon "bun run ~/.channelhub/src/daemon.ts"
 | `/status` | Dashboard with session details |
 | `/spawn <name> <path> [team-size]` | Launch Claude in tmux |
 | `/kill <name>` | Stop a session |
+| `/remove <name>` | Remove a disconnected session from the list |
 | `/team <name> [add]` | Show team status or add teammate |
 | `/trust <name> [auto\|ask]` | Toggle auto-approve permissions |
 | `/prefix <name> <text>` | Set command prefix for a session |
@@ -209,6 +210,7 @@ The hub monitors `~/.claude/tasks/` for agent team task files and displays progr
 | `telegramAllowFrom` | string[] | `[]` | Telegram user IDs allowed. **Empty = deny all.** The Telegram frontend refuses to start and web auth rejects every login when this list is empty. |
 | `defaultTrust` | `"ask"` \| `"auto-approve"` | `"ask"` | Default permission mode for new sessions |
 | `defaultUploadDir` | string | `"."` | Upload directory relative to project root |
+| `browseRoot` | string | `$HOME` | Scope for the spawn dialog's directory picker. Set to `"/home"` when the daemon runs as `root` with projects under `/home/*`. |
 
 Config file: `~/.claude/channels/hub/config.json`
 

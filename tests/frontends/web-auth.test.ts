@@ -1,6 +1,9 @@
 // tests/frontends/web-auth.test.ts
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { createHash, createHmac } from 'crypto'
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
   WebFrontend,
   signSession,
@@ -9,6 +12,7 @@ import {
   pathInsideRoot,
 } from '../../src/frontends/web'
 import { SessionRegistry } from '../../src/session-registry'
+import { ScreenManager } from '../../src/screen-manager'
 
 const TOKEN = 'test-bot-token-abc123'
 const ALLOWED = '123'
@@ -220,6 +224,156 @@ describe('POST /api/auth/telegram', () => {
   })
 })
 
+describe('POST /api/remove', () => {
+  let web: WebFrontend
+  let registry: SessionRegistry
+
+  beforeEach(async () => {
+    registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    web = new WebFrontend({
+      port: 0,
+      registry,
+      router: null as any,
+      permissions: null as any,
+      socketServer: { disconnectSession: () => {} } as any,
+      screenManager: { forgetManaged: () => {} } as any,
+      telegramToken: TOKEN,
+      telegramBotUsername: '',
+      telegramAllowFrom: [ALLOWED],
+      taskMonitor: null,
+    })
+    await web.start()
+  })
+
+  afterEach(async () => {
+    await web.stop()
+  })
+
+  test('removes a disconnected session from the registry', async () => {
+    const path = '/home/u/proj'
+    registry.register(path)
+    registry.disconnect(path)
+    expect(registry.get(path)?.status).toBe('disconnected')
+
+    const res = await fetch(`http://localhost:${web.port}/api/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify({ name: registry.list()[0]!.name }),
+    })
+    expect(res.status).toBe(200)
+    expect(registry.get(path)).toBeUndefined()
+  })
+
+  test('refuses to remove an active session with 409', async () => {
+    const path = '/home/u/proj'
+    registry.register(path)
+    expect(registry.get(path)?.status).toBe('active')
+
+    const res = await fetch(`http://localhost:${web.port}/api/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify({ name: registry.list()[0]!.name }),
+    })
+    expect(res.status).toBe(409)
+    // Session still registered
+    expect(registry.get(path)).toBeDefined()
+  })
+
+  test('returns 404 for an unknown session name', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify({ name: 'does-not-exist' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  test('requires auth cookie', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'anything' }),
+    })
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /api/browse', () => {
+  let web: WebFrontend
+  let registry: SessionRegistry
+  let tmpRoot: string
+
+  beforeEach(async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hub-browse-'))
+    mkdirSync(join(tmpRoot, 'alpha'))
+    mkdirSync(join(tmpRoot, 'beta'))
+    mkdirSync(join(tmpRoot, '.hidden'))
+
+    registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    web = new WebFrontend({
+      port: 0,
+      browseRoot: tmpRoot,
+      registry,
+      router: null as any,
+      permissions: null as any,
+      socketServer: null as any,
+      screenManager: null as any,
+      telegramToken: TOKEN,
+      telegramBotUsername: '',
+      telegramAllowFrom: [ALLOWED],
+      taskMonitor: null,
+    })
+    await web.start()
+  })
+
+  afterEach(async () => {
+    await web.stop()
+    rmSync(tmpRoot, { recursive: true, force: true })
+  })
+
+  test('lists subdirectories under the configured browseRoot', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/browse?path=${encodeURIComponent(tmpRoot)}`, {
+      headers: { cookie: authCookie() },
+    })
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.root).toBe(tmpRoot + '/')
+    expect(data.dirs).toContain(join(tmpRoot, 'alpha') + '/')
+    expect(data.dirs).toContain(join(tmpRoot, 'beta') + '/')
+    // Hidden dirs are filtered
+    expect(data.dirs.some((d: string) => d.includes('.hidden'))).toBe(false)
+  })
+
+  test('missing path param echoes the configured root', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/browse`, {
+      headers: { cookie: authCookie() },
+    })
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.root).toBe(tmpRoot + '/')
+    expect(data.dirs.length).toBeGreaterThan(0)
+  })
+
+  test('rejects paths outside browseRoot with 403', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/browse?path=${encodeURIComponent('/etc')}`, {
+      headers: { cookie: authCookie() },
+    })
+    expect(res.status).toBe(403)
+  })
+
+  test('rejects traversal attempts with 403', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/browse?path=${encodeURIComponent(tmpRoot + '/../../etc')}`, {
+      headers: { cookie: authCookie() },
+    })
+    expect(res.status).toBe(403)
+  })
+
+  test('requires auth cookie', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/browse?path=${encodeURIComponent(tmpRoot)}`)
+    expect(res.status).toBe(401)
+  })
+})
+
 describe('API auth middleware', () => {
   let web: WebFrontend
 
@@ -282,5 +436,179 @@ describe('API auth middleware', () => {
       headers: { Upgrade: 'websocket', Connection: 'Upgrade' },
     })
     expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /api/sessions/:name/prior', () => {
+  let web: WebFrontend
+  let tmpProjectsRoot: string
+  let registry: SessionRegistry
+
+  beforeEach(async () => {
+    tmpProjectsRoot = mkdtempSync(join(tmpdir(), 'web-prior-'))
+    registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    // Register a session at a real-looking cwd. The registry key will be `${cwd}:0`.
+    const projectCwd = join(tmpProjectsRoot, 'project')
+    mkdirSync(projectCwd, { recursive: true })
+    registry.register(`${projectCwd}:0`, { name: 'alpha' })
+
+    web = new WebFrontend({
+      port: 0,
+      registry,
+      router: null as any,
+      permissions: null as any,
+      socketServer: null as any,
+      screenManager: null as any,
+      telegramToken: TOKEN,
+      telegramBotUsername: '',
+      telegramAllowFrom: [ALLOWED],
+      taskMonitor: null,
+      projectsRootOverride: tmpProjectsRoot,
+    })
+    await web.start()
+  })
+
+  afterEach(async () => {
+    await web.stop()
+    rmSync(tmpProjectsRoot, { recursive: true, force: true })
+  })
+
+  test('requires auth', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/sessions/alpha/prior`)
+    expect(res.status).toBe(401)
+  })
+
+  test('returns 404 for unknown session', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/sessions/ghost/prior`, {
+      headers: { Cookie: authCookie() },
+    })
+    expect(res.status).toBe(404)
+  })
+
+  test('returns empty list when project has no prior sessions', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/sessions/alpha/prior`, {
+      headers: { Cookie: authCookie() },
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { sessions: unknown[] }
+    expect(body.sessions).toEqual([])
+  })
+
+  test('returns sessions newest-first with first message preview', async () => {
+    // The project cwd stored in the registry is `${tmpProjectsRoot}/project`.
+    // Claude would store that cwd's sessions at `${tmpProjectsRoot}/-<tmpProjectsRoot>-project/`.
+    // Since the override root is `tmpProjectsRoot`, the storage dir is:
+    //   join(tmpProjectsRoot, encodeProjectPath(`${tmpProjectsRoot}/project`))
+    // Compute it the same way listPriorSessions does.
+    const projectCwd = join(tmpProjectsRoot, 'project')
+    const encoded = projectCwd.replace(/\//g, '-')
+    const storageDir = join(tmpProjectsRoot, encoded)
+    mkdirSync(storageDir, { recursive: true })
+    writeFileSync(
+      join(storageDir, 'aaaa1111-2222-3333-4444-555555555555.jsonl'),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi claude' } }) + '\n',
+    )
+
+    const res = await fetch(`http://localhost:${web.port}/api/sessions/alpha/prior`, {
+      headers: { Cookie: authCookie() },
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { sessions: Array<{ id: string; firstUserMessage: string; mtime: number }> }
+    expect(body.sessions.length).toBe(1)
+    expect(body.sessions[0].id).toBe('aaaa1111-2222-3333-4444-555555555555')
+    expect(body.sessions[0].firstUserMessage).toBe('hi claude')
+  })
+})
+
+describe('POST /api/spawn with resume', () => {
+  let web: WebFrontend
+  let spawnCalls: Array<{ name: string; path: string; instructions?: string; profile?: string; resume?: unknown }>
+
+  beforeEach(async () => {
+    spawnCalls = []
+    const registry = new SessionRegistry({ defaultTrust: 'ask', defaultUploadDir: '.' })
+    const fakeScreen = {
+      spawn: async (name: string, path: string, instructions?: string, profileName?: string, resume?: unknown) => {
+        spawnCalls.push({ name, path, instructions, profile: profileName, resume })
+      },
+      spawnTeam: async () => {},
+      isManaged: () => false,
+    }
+    web = new WebFrontend({
+      port: 0,
+      registry,
+      router: null as any,
+      permissions: null as any,
+      socketServer: null as any,
+      screenManager: fakeScreen as unknown as ScreenManager,
+      telegramToken: TOKEN,
+      telegramBotUsername: '',
+      telegramAllowFrom: [ALLOWED],
+      taskMonitor: null,
+    })
+    await web.start()
+  })
+
+  afterEach(async () => {
+    await web.stop()
+  })
+
+  test('resume="continue" passes through to ScreenManager', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/spawn`, {
+      method: 'POST',
+      headers: { Cookie: authCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'alpha', path: '/tmp/proj', resume: 'continue' }),
+    })
+    expect(res.status).toBe(200)
+    expect(spawnCalls.length).toBe(1)
+    expect(spawnCalls[0].resume).toEqual({ mode: 'continue' })
+  })
+
+  test('resume={sessionId} passes through as session mode', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/spawn`, {
+      method: 'POST',
+      headers: { Cookie: authCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'alpha',
+        path: '/tmp/proj',
+        resume: { sessionId: 'aaaa1111-2222-3333-4444-555555555555' },
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(spawnCalls[0].resume).toEqual({ mode: 'session', id: 'aaaa1111-2222-3333-4444-555555555555' })
+  })
+
+  test('rejects invalid session id with 400', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/spawn`, {
+      method: 'POST',
+      headers: { Cookie: authCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'alpha',
+        path: '/tmp/proj',
+        resume: { sessionId: '../../etc/passwd' },
+      }),
+    })
+    expect(res.status).toBe(400)
+    expect(spawnCalls.length).toBe(0)
+  })
+
+  test('no resume field → spawn called without resume', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/spawn`, {
+      method: 'POST',
+      headers: { Cookie: authCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'alpha', path: '/tmp/proj' }),
+    })
+    expect(res.status).toBe(200)
+    expect(spawnCalls[0].resume).toBeUndefined()
+  })
+
+  test('rejects resume when teamSize > 1', async () => {
+    const res = await fetch(`http://localhost:${web.port}/api/spawn`, {
+      method: 'POST',
+      headers: { Cookie: authCookie(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'team', path: '/tmp/proj', teamSize: 2, resume: 'continue' }),
+    })
+    expect(res.status).toBe(400)
+    expect(spawnCalls.length).toBe(0)
   })
 })

@@ -9,9 +9,11 @@ import type { SessionRegistry } from '../session-registry'
 import type { MessageRouter } from '../message-router'
 import type { PermissionEngine } from '../permission-engine'
 import type { SocketServer } from '../socket-server'
-import type { ScreenManager } from '../screen-manager'
+import { ScreenManager, isValidSessionId, type ResumeSpec } from '../screen-manager'
 import type { PermissionRequest, TrustLevel } from '../types'
 import type { TaskMonitor } from '../task-monitor'
+import { saveSessions } from '../config'
+import { listPriorSessions } from '../claude-sessions'
 
 const COOKIE_NAME = 'hub_session'
 const COOKIE_MAX_AGE_SEC = 86400 // 24h
@@ -96,6 +98,7 @@ export function pathInsideRoot(target: string, root: string): string | null {
 type WebFrontendDeps = {
   port: number
   host?: string
+  browseRoot?: string
   registry: SessionRegistry
   router: MessageRouter | null
   permissions: PermissionEngine | null
@@ -105,6 +108,7 @@ type WebFrontendDeps = {
   telegramBotUsername: string
   telegramAllowFrom: string[]
   taskMonitor: TaskMonitor | null
+  projectsRootOverride?: string  // test-only: override ~/.claude/projects root
 }
 
 export class WebFrontend {
@@ -184,28 +188,29 @@ export class WebFrontend {
           return self.handleTelegramAuth(req)
         }
 
-        // Browse directories — scoped to subtrees of $HOME so an attacker
-        // (post-auth, so the allowlist holds) can't enumerate /etc, /root,
-        // or /home/<other-user>. Users who want a different root must run
-        // the daemon as a user whose $HOME is that root.
+        // Browse directories — scoped to a configurable root (defaults to
+        // $HOME) so an attacker (post-auth, so the allowlist holds) can't
+        // enumerate /etc, /root, or sibling home directories. Operators
+        // running the daemon as root with projects under /home can set
+        // config.browseRoot to "/home" to widen the scope deliberately.
         if (url.pathname === '/api/browse' && req.method === 'GET') {
-          const requested = url.searchParams.get('path') || homedir() + '/'
-          const scoped = pathInsideRoot(requested, homedir())
+          const root = resolve(self.deps.browseRoot ?? homedir())
+          const requested = url.searchParams.get('path') || root + '/'
+          const scoped = pathInsideRoot(requested, root)
           if (!scoped) {
             return new Response('Path outside allowed root', { status: 403 })
           }
+          let dirs: string[] = []
           try {
             const entries = readdirSync(scoped)
-            const dirs = entries
+            dirs = entries
               .filter(e => {
                 try { return statSync(join(scoped, e)).isDirectory() && !e.startsWith('.') } catch { return false }
               })
               .sort()
               .map(e => join(scoped, e) + '/')
-            return Response.json(dirs)
-          } catch {
-            return Response.json([])
-          }
+          } catch {}
+          return Response.json({ root: root + '/', dirs })
         }
 
         // API routes
@@ -228,6 +233,10 @@ export class WebFrontend {
 
         if (url.pathname === '/api/kill' && req.method === 'POST') {
           return self.handleKill(req)
+        }
+
+        if (url.pathname === '/api/remove' && req.method === 'POST') {
+          return self.handleRemove(req)
         }
 
         if (url.pathname === '/api/send' && req.method === 'POST') {
@@ -267,6 +276,13 @@ export class WebFrontend {
 
         if (url.pathname === '/api/session/facts' && req.method === 'POST') {
           return self.handleFacts(req)
+        }
+
+        {
+          const m = url.pathname.match(/^\/api\/sessions\/([^/]+)\/prior$/)
+          if (m && req.method === 'GET') {
+            return self.handlePriorSessions(decodeURIComponent(m[1]))
+          }
         }
 
         return new Response('Not Found', { status: 404 })
@@ -503,16 +519,34 @@ export class WebFrontend {
 
   private async handleSpawn(req: Request): Promise<Response> {
     try {
-      const { name, path, teamSize, instructions } = (await req.json()) as { name: string; path: string; teamSize?: number; instructions?: string }
+      const body = (await req.json()) as {
+        name: string
+        path: string
+        teamSize?: number
+        instructions?: string
+        resume?: 'continue' | { sessionId: string }
+      }
+      const { name, path, teamSize, instructions, resume } = body
       if (!this.deps.screenManager) return new Response('No screen manager', { status: 503 })
+
+      let resumeSpec: ResumeSpec | undefined
+      if (resume === 'continue') {
+        resumeSpec = { mode: 'continue' }
+      } else if (resume && typeof resume === 'object' && typeof resume.sessionId === 'string') {
+        if (!isValidSessionId(resume.sessionId)) {
+          return new Response('Invalid session id', { status: 400 })
+        }
+        resumeSpec = { mode: 'session', id: resume.sessionId }
+      }
+
       const size = teamSize ?? 1
       if (size > 1) {
-        // Don't await — spawnTeam takes 10+ seconds, respond immediately
+        if (resumeSpec) return new Response('Resume not supported with teamSize > 1', { status: 400 })
         this.deps.screenManager.spawnTeam(name, path, size, instructions).catch(err => {
           process.stderr.write(`hub: spawnTeam error: ${err}\n`)
         })
       } else {
-        await this.deps.screenManager.spawn(name, path, instructions)
+        await this.deps.screenManager.spawn(name, path, instructions, undefined, resumeSpec)
       }
       return Response.json({ ok: true })
     } catch (err) {
@@ -532,6 +566,26 @@ export class WebFrontend {
         this.deps.socketServer?.disconnectSession(path)
         this.deps.registry.unregister(path)
       }
+      this.refreshSessions()
+      return Response.json({ ok: true })
+    } catch (err) {
+      return new Response(String(err), { status: 500 })
+    }
+  }
+
+  private async handleRemove(req: Request): Promise<Response> {
+    try {
+      const { name } = (await req.json()) as { name: string }
+      const path = this.deps.registry.findByName(name)
+      if (!path) return new Response(`Session not found: ${name}`, { status: 404 })
+      const state = this.deps.registry.get(path)
+      if (state && state.status !== 'disconnected') {
+        return new Response('Session is still connected — use close instead', { status: 409 })
+      }
+      this.deps.screenManager?.forgetManaged(name)
+      this.deps.socketServer?.disconnectSession(path)
+      this.deps.registry.unregister(path)
+      saveSessions(this.deps.registry.toSaveFormat())
       this.refreshSessions()
       return Response.json({ ok: true })
     } catch (err) {
@@ -607,6 +661,21 @@ export class WebFrontend {
       return Response.json({ ok: true })
     } catch (err) {
       return new Response(String(err), { status: 500 })
+    }
+  }
+
+  private async handlePriorSessions(name: string): Promise<Response> {
+    const path = this.deps.registry.findByName(name)
+    if (!path) return new Response('Session not found', { status: 404 })
+    const projectPath = path.replace(/:\d+$/, '')
+    try {
+      const sessions = await listPriorSessions(projectPath, {
+        rootOverride: this.deps.projectsRootOverride,
+      })
+      return Response.json({ sessions })
+    } catch (err) {
+      process.stderr.write(`hub: /api/sessions/${name}/prior error: ${err}\n`)
+      return Response.json({ sessions: [], error: 'read-failed' }, { status: 200 })
     }
   }
 }

@@ -270,6 +270,54 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+    /* Restart popover */
+    .restart-popover {
+      position: absolute;
+      z-index: 150;
+      background: var(--sidebar);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      min-width: 280px;
+      max-width: 360px;
+      padding: 6px 0;
+      font-size: 12px;
+    }
+    .restart-popover .rp-section {
+      padding: 6px 12px;
+      color: var(--text-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .restart-popover .rp-item {
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+    }
+    .restart-popover .rp-item:hover,
+    .restart-popover .rp-item.focused { background: rgba(255,255,255,0.06); }
+    .restart-popover .rp-item.disabled { opacity: 0.4; cursor: default; }
+    .restart-popover .rp-preview {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .restart-popover .rp-time {
+      color: var(--text-muted);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .restart-popover hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 4px 0;
+    }
+
     /* Mobile */
     @media (max-width: 768px) {
       #sidebar {
@@ -509,8 +557,15 @@
             restartBtn.textContent = '↻'
             restartBtn.title = 'Restart session'
             restartBtn.style.cssText = 'background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;margin-left:auto;'
-            restartBtn.onclick = (e) => { e.stopPropagation(); restartSession(s.name, s.path) }
+            restartBtn.onclick = (e) => { e.stopPropagation(); openRestartPopover(s.name, s.path, restartBtn) }
             item.appendChild(restartBtn)
+
+            const removeBtn = document.createElement('button')
+            removeBtn.textContent = '✕'
+            removeBtn.title = 'Remove from list'
+            removeBtn.style.cssText = 'background:none;border:1px solid #c96;color:#c96;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;margin-left:4px;'
+            removeBtn.onclick = (e) => { e.stopPropagation(); removeSession(s.name) }
+            item.appendChild(removeBtn)
           }
 
           if (s.status !== 'disconnected') {
@@ -723,20 +778,149 @@
       })
     }
 
-    // Restart disconnected session
-    async function restartSession(name, path) {
-      try {
-        // Strip :N session-key suffix to get the actual folder path.
-        const folder = path ? path.replace(/:\d+$/, '') : ''
-        const res = await fetch('/api/spawn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, path: folder })
-        })
-        if (!res.ok) throw new Error(await res.text())
-      } catch (err) {
-        alert('Restart failed: ' + err)
+    function formatRelativeTime(sec, nowSec) {
+      const now = nowSec ?? Math.floor(Date.now() / 1000)
+      const diff = now - sec
+      if (diff < 60) return 'just now'
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+      const days = Math.floor(diff / 86400)
+      if (days === 1) return 'yesterday'
+      if (days <= 7) return `${days}d ago`
+      const d = new Date(sec * 1000)
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric' })
+    }
+
+    async function loadPriorSessions(name) {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/prior`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json()
+      return Array.isArray(body.sessions) ? body.sessions : []
+    }
+
+    async function spawnResume(name, folderPath, resume) {
+      const body = { name, path: folderPath }
+      if (resume) body.resume = resume
+      const res = await fetch('/api/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error(await res.text())
+    }
+
+    let _popoverClose = null
+    function openRestartPopover(name, rawPath, anchorEl) {
+      // Strip :N session-key suffix to get the real folder path.
+      const folderPath = rawPath ? rawPath.replace(/:\d+$/, '') : ''
+
+      // Close any existing popover — closes the DOM node AND removes its listeners.
+      if (_popoverClose) _popoverClose()
+
+      const pop = document.createElement('div')
+      pop.className = 'restart-popover'
+      pop.tabIndex = -1
+
+      // Position anchored to the button
+      const rect = anchorEl.getBoundingClientRect()
+      pop.style.top = `${rect.bottom + 4}px`
+      pop.style.left = `${rect.left}px`
+      document.body.appendChild(pop)
+      // Flip if it overflows the viewport
+      const pr = pop.getBoundingClientRect()
+      if (pr.right > window.innerWidth - 8) {
+        pop.style.left = `${Math.max(8, rect.right - pr.width)}px`
       }
+
+      pop.innerHTML = '<div class="rp-section">Loading…</div>'
+
+      const focusables = []
+      let focusIdx = 0
+
+      function setFocus(i) {
+        focusIdx = Math.max(0, Math.min(focusables.length - 1, i))
+        focusables.forEach((el, j) => el.classList.toggle('focused', j === focusIdx))
+        focusables[focusIdx]?.scrollIntoView({ block: 'nearest' })
+      }
+
+      function close() {
+        if (_popoverClose === close) _popoverClose = null
+        pop.remove()
+        document.removeEventListener('keydown', onKey)
+        document.removeEventListener('mousedown', onOutside)
+      }
+      _popoverClose = close
+
+      async function doAction(resume) {
+        close()
+        try {
+          await spawnResume(name, folderPath, resume)
+        } catch (err) {
+          alert('Restart failed: ' + err.message)
+        }
+      }
+
+      function render(sessions) {
+        // Guard: popover may have been closed while the fetch was in flight.
+        if (!pop.isConnected) return
+        pop.innerHTML = ''
+        focusables.length = 0
+
+        if (sessions.length > 0) {
+          const header = document.createElement('div')
+          header.className = 'rp-section'
+          header.textContent = 'Resume'
+          pop.appendChild(header)
+
+          for (const s of sessions) {
+            const item = document.createElement('div')
+            item.className = 'rp-item'
+            item.innerHTML = `
+              <span class="rp-preview"></span>
+              <span class="rp-time"></span>
+            `
+            item.querySelector('.rp-preview').textContent = s.firstUserMessage || '(no messages)'
+            item.querySelector('.rp-time').textContent = formatRelativeTime(s.mtime)
+            item.onclick = () => doAction({ sessionId: s.id })
+            pop.appendChild(item)
+            focusables.push(item)
+          }
+
+          const hr = document.createElement('hr')
+          pop.appendChild(hr)
+        }
+
+        const newItem = document.createElement('div')
+        newItem.className = 'rp-item'
+        newItem.innerHTML = '<span class="rp-preview">✨ New session</span>'
+        newItem.onclick = () => doAction(undefined)
+        pop.appendChild(newItem)
+        focusables.push(newItem)
+
+        setFocus(0)
+        pop.focus()
+      }
+
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); setFocus(focusIdx + 1); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); setFocus(focusIdx - 1); return }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          focusables[focusIdx]?.click()
+        }
+      }
+
+      function onOutside(e) {
+        if (!pop.contains(e.target) && e.target !== anchorEl) close()
+      }
+
+      document.addEventListener('keydown', onKey)
+      document.addEventListener('mousedown', onOutside)
+
+      loadPriorSessions(name)
+        .then(render)
+        .catch(() => render([]))  // treat fetch errors as "no prior sessions" → only New shown
     }
 
     async function closeSession(name) {
@@ -749,6 +933,20 @@
         })
       } catch (err) {
         console.error('Close failed', err)
+      }
+    }
+
+    async function removeSession(name) {
+      if (!confirm(`Remove '${name}' from the list?`)) return
+      try {
+        const res = await fetch('/api/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+        if (!res.ok) throw new Error(await res.text())
+      } catch (err) {
+        alert('Remove failed: ' + err)
       }
     }
 
@@ -798,15 +996,20 @@
         clearTimeout(browseTimeout)
         browseTimeout = setTimeout(() => browsePath(pathInput.value), 300)
       })
-      // Trigger initial browse
-      setTimeout(() => browsePath('/home/'), 100)
+      // Seed with the server's configured browse root (defaults to $HOME).
+      // Sending no path asks the server to echo its root back.
+      browsePath('', true)
 
-      async function browsePath(path) {
-        if (!path) return
+      async function browsePath(path, seedInput = false) {
         try {
-          const res = await fetch('/api/browse?path=' + encodeURIComponent(path))
+          const qs = path ? '?path=' + encodeURIComponent(path) : ''
+          const res = await fetch('/api/browse' + qs)
           if (!res.ok) return
-          const dirs = await res.json()
+          const data = await res.json()
+          const dirs = Array.isArray(data) ? data : (data.dirs || [])
+          if (seedInput && !pathInput.value && data.root) {
+            pathInput.value = data.root
+          }
           suggestions.innerHTML = ''
           for (const d of dirs) {
             const item = document.createElement('div')
@@ -928,6 +1131,28 @@
       for (const file of files) {
         pendingFiles.push(file)
       }
+      renderAttachedFiles()
+    })
+
+    // Paste-to-upload (screenshots via Ctrl+V / Cmd+V)
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items
+      if (!items || items.length === 0) return
+      const pasted = []
+      for (const item of items) {
+        if (item.kind !== 'file') continue
+        const file = item.getAsFile()
+        if (!file) continue
+        let name = file.name
+        if (!name || name === 'image.png') {
+          const ext = (file.type.split('/')[1] || 'png').split('+')[0]
+          name = `pasted-${Date.now()}.${ext}`
+        }
+        pasted.push(new File([file], name, { type: file.type }))
+      }
+      if (pasted.length === 0) return
+      e.preventDefault()
+      for (const f of pasted) pendingFiles.push(f)
       renderAttachedFiles()
     })
 

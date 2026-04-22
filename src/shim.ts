@@ -6,7 +6,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { connect } from 'net'
+import { connect, type Socket } from 'net'
 import { join } from 'path'
 import { homedir } from 'os'
 import type { DaemonToShim, ShimToDaemon } from './types'
@@ -32,6 +32,24 @@ export function buildMcpNotification(content: string, meta: Record<string, strin
   }
 }
 
+// Reconnect backoff: 1s, 2s, 4s, 8s, 16s, then 30s forever.
+export function computeBackoff(attempt: number): number {
+  const schedule = [1000, 2000, 4000, 8000, 16000]
+  return attempt < schedule.length ? schedule[attempt]! : 30000
+}
+
+// Called when the daemon socket closes with in-flight tool calls. Each resolver
+// receives an MCP error result so Claude sees the failure and can decide to retry.
+// The map is cleared in-place; callers keep the same Map instance.
+export function rejectPendingWithDisconnect(
+  pending: Map<string, (result: ReturnType<typeof buildMcpToolResult>) => void>,
+): void {
+  for (const resolve of pending.values()) {
+    resolve(buildMcpToolResult('hub disconnected, retry', true))
+  }
+  pending.clear()
+}
+
 // Only run main when executed directly (not imported for tests)
 if (import.meta.main) {
   main()
@@ -52,6 +70,9 @@ function getHubTmuxSession(): string | null {
   // Only register with the hub if we're running inside a tmux pane whose
   // session name begins with "hub-". Anything else (GNU screen, bare terminal,
   // a separate tmux server, nested sessions) is ignored.
+  // HUB_TEST_BYPASS_SESSION_CHECK lets subprocess integration tests skip the
+  // tmux lookup without depending on a running tmux server.
+  if (process.env.HUB_TEST_BYPASS_SESSION_CHECK === '1') return 'hub-test'
   const pane = process.env.TMUX_PANE
   if (!pane) return null
   try {
@@ -95,8 +116,14 @@ function main() {
   process.stderr.write(`hub shim: running inside tmux session "${hubSession}"\n`)
 
   const cwd = process.cwd()
-  const daemon = connect(SOCKET_PATH)
+
+  let daemon: Socket | null = null
   let registered = false
+  let shuttingDown = false
+  let reconnectAttempt = 0
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let daemonBuffer = ''
+  const pendingToolCalls = new Map<string, (result: ReturnType<typeof buildMcpToolResult>) => void>()
 
   const mcp = new Server(
     { name: 'channelhub', version: '0.1.0' },
@@ -154,22 +181,8 @@ function main() {
     const name = req.params.name
     const args = (req.params.arguments ?? {}) as Record<string, unknown>
 
-    return new Promise((resolve) => {
-      const handler = (chunk: Buffer) => {
-        const lines = chunk.toString().trim().split('\n')
-        for (const line of lines) {
-          const msg = parseShimMessage(line)
-          if (msg.type === 'tool_result' && msg.name === name) {
-            daemon.off('data', handler)
-            resolve(msg.isError
-              ? buildMcpToolResult(String(msg.result), true)
-              : buildMcpToolResult(String(msg.result))
-            )
-            return
-          }
-        }
-      }
-      daemon.on('data', handler)
+    return new Promise<ReturnType<typeof buildMcpToolResult>>((resolve) => {
+      pendingToolCalls.set(name, resolve)
       sendToDaemon({ type: 'tool_call', name, arguments: args })
     })
   })
@@ -186,7 +199,6 @@ function main() {
     }),
     async ({ params }) => {
       process.stderr.write(`hub shim: received permission_request: ${params.tool_name} (${params.request_id})\n`)
-      // Try to parse input_preview as JSON for structured args
       let toolArgs: Record<string, unknown> = {}
       try {
         const parsed = JSON.parse(params.input_preview)
@@ -194,7 +206,6 @@ function main() {
           toolArgs = parsed
         }
       } catch {
-        // input_preview may be truncated or non-JSON; provide a fallback
         toolArgs = { command: params.input_preview }
       }
 
@@ -209,17 +220,6 @@ function main() {
     },
   )
 
-  let daemonBuffer = ''
-  daemon.on('data', (chunk) => {
-    daemonBuffer += chunk.toString()
-    let idx: number
-    while ((idx = daemonBuffer.indexOf('\n')) !== -1) {
-      const line = daemonBuffer.slice(0, idx)
-      daemonBuffer = daemonBuffer.slice(idx + 1)
-      if (line.trim()) handleDaemonMessage(parseShimMessage(line))
-    }
-  })
-
   function handleDaemonMessage(msg: DaemonToShim): void {
     switch (msg.type) {
       case 'registered':
@@ -228,12 +228,10 @@ function main() {
         break
       case 'rejected':
         process.stderr.write(`hub shim: rejected — ${msg.reason}\n`)
+        shuttingDown = true
         process.exit(1)
         break
       case 'channel_message': {
-        // Append a directive so Claude reliably calls the reply tool instead of
-        // treating the message like an inline user prompt. The instructions field
-        // on the MCP server is only seen once at init; this nudge is per-message.
         const annotated = `${msg.content}\n\n[hub] You must respond using the channelhub reply tool — do NOT just type your answer. Plain text in this terminal is not visible to the user; only the reply tool routes back to the frontend.`
         mcp.notification({
           method: 'notifications/claude/channel',
@@ -241,6 +239,16 @@ function main() {
         }).catch((err) => {
           process.stderr.write(`hub shim: failed to deliver message: ${err}\n`)
         })
+        break
+      }
+      case 'tool_result': {
+        const resolve = pendingToolCalls.get(msg.name)
+        if (resolve) {
+          pendingToolCalls.delete(msg.name)
+          resolve(msg.isError
+            ? buildMcpToolResult(String(msg.result), true)
+            : buildMcpToolResult(String(msg.result)))
+        }
         break
       }
       case 'permission_response':
@@ -255,33 +263,80 @@ function main() {
   }
 
   function sendToDaemon(msg: ShimToDaemon): void {
+    if (!daemon || daemon.destroyed) {
+      process.stderr.write(`hub shim: dropping ${msg.type} (not connected)\n`)
+      return
+    }
     daemon.write(JSON.stringify(msg) + '\n')
   }
 
-  daemon.on('connect', () => {
-    sendToDaemon({ type: 'register', cwd })
-  })
+  function rejectPendingToolCalls(): void {
+    rejectPendingWithDisconnect(pendingToolCalls)
+  }
 
-  daemon.on('error', (err) => {
-    process.stderr.write(`hub shim: daemon connection error: ${err.message}\n`)
-    process.stderr.write(`hub shim: is the daemon running? Start with: bun run daemon\n`)
-    process.exit(1)
-  })
+  function scheduleReconnect(): void {
+    if (shuttingDown || reconnectTimer) return
+    const delay = computeBackoff(reconnectAttempt)
+    process.stderr.write(`hub shim: reconnecting in ${Math.round(delay / 1000)}s…\n`)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      reconnectAttempt += 1
+      openConnection()
+    }, delay)
+  }
 
-  daemon.on('close', () => {
-    process.stderr.write('hub shim: daemon disconnected\n')
+  function openConnection(): void {
+    daemonBuffer = ''
+    registered = false
+    const sock = connect(SOCKET_PATH)
+    daemon = sock
+
+    sock.on('connect', () => {
+      reconnectAttempt = 0
+      process.stderr.write('hub shim: connected to daemon, registering…\n')
+      sendToDaemon({ type: 'register', cwd })
+    })
+
+    sock.on('data', (chunk) => {
+      daemonBuffer += chunk.toString()
+      let idx: number
+      while ((idx = daemonBuffer.indexOf('\n')) !== -1) {
+        const line = daemonBuffer.slice(0, idx)
+        daemonBuffer = daemonBuffer.slice(idx + 1)
+        if (line.trim()) handleDaemonMessage(parseShimMessage(line))
+      }
+    })
+
+    sock.on('error', (err) => {
+      process.stderr.write(`hub shim: socket error: ${err.message}\n`)
+      // 'close' fires next and handles reconnect.
+    })
+
+    sock.on('close', () => {
+      registered = false
+      rejectPendingToolCalls()
+      scheduleReconnect()
+    })
+  }
+
+  function shutdown(): void {
+    shuttingDown = true
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (daemon && !daemon.destroyed) daemon.end()
     process.exit(0)
-  })
+  }
+
+  openConnection()
 
   mcp.connect(new StdioServerTransport()).catch((err) => {
     process.stderr.write(`hub shim: MCP connect failed: ${err}\n`)
     process.exit(1)
   })
 
-  process.stdin.on('end', () => {
-    daemon.end()
-    process.exit(0)
-  })
-  process.on('SIGTERM', () => { daemon.end(); process.exit(0) })
-  process.on('SIGINT', () => { daemon.end(); process.exit(0) })
+  process.stdin.on('end', shutdown)
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
 }

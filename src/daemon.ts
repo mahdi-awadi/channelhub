@@ -271,6 +271,7 @@ async function start(): Promise<void> {
   webFrontend = new WebFrontend({
     port: config.webPort,
     host: config.webHost,
+    browseRoot: config.browseRoot,
     registry,
     router,
     permissions,

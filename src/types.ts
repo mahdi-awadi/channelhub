@@ -55,6 +55,7 @@ export type SessionState = SessionConfig & {
 export type HubConfig = {
   webPort: number
   webHost?: string
+  browseRoot?: string
   telegramToken: string
   telegramBotUsername?: string
   telegramAllowFrom: string[]

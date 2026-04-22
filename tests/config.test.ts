@@ -36,6 +36,25 @@ describe('config', () => {
     expect(loaded).toEqual(config)
   })
 
+  test('browseRoot roundtrips through save/load', () => {
+    const config = {
+      webPort: 3000,
+      browseRoot: '/home',
+      telegramToken: '',
+      telegramAllowFrom: [],
+      defaultTrust: 'ask' as const,
+      defaultUploadDir: '.',
+    }
+    saveHubConfig(config, TEST_DIR)
+    const loaded = loadHubConfig(TEST_DIR)
+    expect(loaded.browseRoot).toBe('/home')
+  })
+
+  test('browseRoot is undefined by default', () => {
+    const loaded = loadHubConfig(TEST_DIR)
+    expect(loaded.browseRoot).toBeUndefined()
+  })
+
   test('loadSessions returns empty object when file missing', () => {
     const sessions = loadSessions(TEST_DIR)
     expect(sessions).toEqual({})

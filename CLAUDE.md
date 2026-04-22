@@ -95,6 +95,7 @@ Commands:
 - `/status` — dashboard with details
 - `/spawn <name> <path> [team-size]` — launch Claude in tmux
 - `/kill <name>` — stop a session
+- `/remove <name>` — remove a disconnected session from the list (no tmux ops)
 - `/team <name> [add]` — show team status or add teammate
 - `/trust <name> [auto|ask]` — toggle auto-approve
 - `/prefix <name> <text>` — set command prefix
@@ -132,6 +133,7 @@ Commands: `list`, `status`, `spawn`, `kill`, `send`, `trust`, `prefix`, `rename`
 - `telegramAllowFrom`: Telegram user IDs (empty = allow all). Also controls web login.
 - `defaultTrust`: `ask` (prompt user) or `auto-approve` (auto-allow all tools)
 - `defaultUploadDir`: where uploaded files go (relative to project root)
+- `browseRoot` (optional): scope for `/api/browse` and the spawn dialog directory picker. Defaults to `$HOME`. Set to `"/home"` if the daemon runs as `root` with projects under `/home/*`.
 
 Supports `CLAUDE_PLUGIN_DATA` env var for plugin-managed data persistence.
 

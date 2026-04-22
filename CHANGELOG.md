@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `/api/browse` and the spawn dialog's directory picker were broken when the daemon's `$HOME` was not an ancestor of the paths users wanted to spawn sessions in (e.g. daemon running as `root` with projects under `/home/*`). The initial browse was hardcoded to `/home/` in the web client and the scope was fixed to `$HOME`, so the dropdown returned 403 for every operator unless their home happened to contain `/home/`.
+
+### Added
+- Web dashboard: clicking the `↻` button on a disconnected session now opens a popover with two choices: **Resume** (picker over past conversations for this project's cwd, most recent pre-selected) and **New session**. Resume uses `claude --continue` / `claude --resume <id>`. Keyboard: Enter = activate, Arrow keys = navigate, Escape = close. Empty project (no prior sessions) shows only **New session**. ([spec](docs/superpowers/specs/2026-04-22-restart-resume-design.md) / [plan](docs/superpowers/plans/2026-04-22-restart-resume.md))
+- New backend endpoint `GET /api/sessions/:name/prior` returning up to 10 recent sessions with first-user-message preview and `mtime`, read from `~/.claude/projects/<encoded-cwd>/*.jsonl`.
+- `POST /api/spawn` gains an optional `resume: "continue" | { sessionId }` field; session IDs are validated against `^[0-9a-f-]{8,64}$`. Rejects `resume` when `teamSize > 1`.
+- `ScreenManager.spawn()` gains an optional 5th `resume` parameter. Auto-respawn (crash recovery) stays resume-free by design.
+- Web: `✕` button on disconnected session rows — `POST /api/remove` unregisters from the hub without tmux ops. Rejects active sessions with 409.
+- Telegram: `/remove <name>` command for disconnected sessions (mirror of the web UI).
+- Web: paste-to-upload for screenshots (`Ctrl+V` / `Cmd+V`) — pasted images attach to the next outgoing message.
+- `browseRoot` config option widens the `/api/browse` scope beyond `$HOME`. Operators running the daemon as `root` with projects under `/home` can set `"browseRoot": "/home"` to restore the directory picker. Defaults to `$HOME` — safe-by-default unchanged.
+- `/api/browse` response is now `{ root, dirs }` so the web client seeds the spawn dialog with the server's configured root instead of a hardcoded path.
+- Shim: automatic reconnect to the daemon with exponential backoff (1/2/4/8/16/30s). A daemon restart is now invisible to the end user; sessions re-register within seconds and go green again. Pending tool calls reject with `hub disconnected, retry` so Claude can decide to retry. `SIGTERM`/`SIGINT` suppresses reconnect for clean shutdown. ([spec](docs/superpowers/specs/2026-04-22-shim-auto-reconnect-design.md))
+
 ## [0.1.0-beta.2] - 2026-04-21
 
 ### Security

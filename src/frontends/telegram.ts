@@ -8,7 +8,7 @@ import type { ScreenManager } from '../screen-manager'
 import type { SocketServer } from '../socket-server'
 import type { TaskMonitor } from '../task-monitor'
 import { getProfile } from '../profiles'
-import { loadProfilesForHub, saveProfilesForHub } from '../config'
+import { loadProfilesForHub, saveProfilesForHub, saveSessions } from '../config'
 import type { VerificationRunner, VerificationResult } from '../verification'
 
 // ── Pure helper functions ────────────────────────────────────────────────────
@@ -399,6 +399,31 @@ export class TelegramFrontend {
       }
       this.registry.unregister(path)
       await ctx.reply(`Killed session ${name}`)
+    })
+
+    // /remove <name> — drop a disconnected session from the list (no tmux ops)
+    bot.command('remove', async (ctx) => {
+      if (!this.isAllowed(ctx)) return
+      const name = ctx.match?.trim()
+      if (!name) {
+        await ctx.reply('Usage: /remove <name>')
+        return
+      }
+      const path = this.registry.findByName(name)
+      if (!path) {
+        await ctx.reply(`Session not found: ${name}`)
+        return
+      }
+      const state = this.registry.get(path)
+      if (state && state.status !== 'disconnected') {
+        await ctx.reply(`Session ${name} is still connected. Use /kill to close it first.`)
+        return
+      }
+      this.screenManager.forgetManaged(name)
+      this.socketServer.disconnectSession(path)
+      this.registry.unregister(path)
+      saveSessions(this.registry.toSaveFormat())
+      await ctx.reply(`Removed ${name} from the list`)
     })
 
     // /rename <old> <new>
@@ -933,6 +958,7 @@ export class TelegramFrontend {
       { command: 'status',   description: 'Dashboard with details' },
       { command: 'spawn',    description: 'Spawn a new session: <name> <path> [--profile <n>] [team-size]' },
       { command: 'kill',     description: 'Gracefully end a session: <name>' },
+      { command: 'remove',   description: 'Remove a disconnected session from the list: <name>' },
       { command: 'team',     description: 'Show team or add teammate: <name> [add]' },
       { command: 'trust',    description: 'Set trust: <name> strict|ask|auto|yolo' },
       { command: 'prefix',   description: 'Set message prefix: <name> <text>' },

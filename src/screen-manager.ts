@@ -21,8 +21,33 @@ type ManagedSession = {
   profileName?: string
 }
 
-const CLAUDE_CMD = 'claude --dangerously-load-development-channels server:hub'
-const CLAUDE_TEAM_CMD = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-load-development-channels server:hub'
+const CHANNELS_FLAG = '--dangerously-load-development-channels server:hub'
+const TEAM_ENV = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1'
+
+export type ResumeSpec =
+  | { mode: 'continue' }
+  | { mode: 'session', id: string }
+
+export function isValidSessionId(id: string): boolean {
+  return /^[0-9a-f-]{8,64}$/i.test(id)
+}
+
+export function buildClaudeCmd(opts: { team: boolean; resume?: ResumeSpec }): string {
+  let flag = ''
+  if (opts.resume?.mode === 'continue') {
+    flag = '--continue '
+  } else if (opts.resume?.mode === 'session') {
+    if (!isValidSessionId(opts.resume.id)) {
+      throw new Error(`invalid session id: ${opts.resume.id}`)
+    }
+    flag = `--resume ${opts.resume.id} `
+  }
+  const base = `claude ${flag}${CHANNELS_FLAG}`
+  return opts.team ? `${TEAM_ENV} ${base}` : base
+}
+
+// Team-mode command is referenced by spawnTeam / addTeammate; keep as a constant.
+const CLAUDE_TEAM_CMD = buildClaudeCmd({ team: true })
 const CONFIRM_DELAY = 1500
 const CONFIRM_RETRIES = 5
 const CONFIRM_INTERVAL = 1000
@@ -34,7 +59,13 @@ export class ScreenManager {
   private managed = new Map<string, ManagedSession>()
   private respawnTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  async spawn(name: string, projectPath: string, instructions?: string, profileName?: string): Promise<void> {
+  async spawn(
+    name: string,
+    projectPath: string,
+    instructions?: string,
+    profileName?: string,
+    resume?: ResumeSpec,
+  ): Promise<void> {
     const sessionName = `hub-${name}`
     ensureProjectDir(projectPath)
 
@@ -42,7 +73,8 @@ export class ScreenManager {
     try { await $`tmux kill-session -t ${sessionName}`.quiet() } catch {}
 
     // Create detached tmux session running Claude
-    await $`tmux new-session -d -s ${sessionName} -c ${projectPath} ${CLAUDE_CMD}`.quiet()
+    const cmd = buildClaudeCmd({ team: false, resume })
+    await $`tmux new-session -d -s ${sessionName} -c ${projectPath} ${cmd}`.quiet()
     this.managed.set(name, { sessionName, projectPath, respawnEnabled: true, profileName })
 
     // Auto-confirm the development channels warning, then send instructions if any
@@ -253,6 +285,18 @@ export class ScreenManager {
     })
 
     return tmName
+  }
+
+  forgetManaged(name: string): void {
+    const entry = this.managed.get(name)
+    if (!entry) return
+    entry.respawnEnabled = false
+    const timer = this.respawnTimers.get(name)
+    if (timer) {
+      clearTimeout(timer)
+      this.respawnTimers.delete(name)
+    }
+    this.managed.delete(name)
   }
 
   isManaged(name: string): boolean {
