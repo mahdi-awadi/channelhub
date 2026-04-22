@@ -49,3 +49,6 @@ config.json
 # Local test artifacts
 tests/**/.test-*
 /tmp/
+
+# Git worktrees
+.worktrees/
